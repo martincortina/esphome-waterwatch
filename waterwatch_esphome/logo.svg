@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 100">
+<rect width="250" height="100" rx="16" fill="#183d3b"/>
+<g transform="translate(10 10) scale(.3125)"><rect width="256" height="256" rx="54" fill="#183d3b"/>
+<path d="M128 40 C108 68 64 112 64 148 C64 200 100 226 128 226 C156 226 192 200 192 148 C192 112 148 68 128 40 Z" fill="#c1f5df"/>
+<circle cx="128" cy="155" r="31" fill="#183d3b"/>
+<circle cx="128" cy="155" r="19" fill="#ffffff"/>
+<circle cx="128" cy="155" r="11" fill="#183d3b"/>
+<circle cx="122" cy="149" r="4" fill="#ffffff"/></g>
+<text x="101" y="51" font-family="Segoe UI, sans-serif" font-weight="600" font-size="23" fill="#ffffff">WaterWatch</text>
+<text x="102" y="71" font-family="Segoe UI, sans-serif" font-size="11" fill="#c1f5df">ESPHome · OCR</text>
+</svg>
