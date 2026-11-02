@@ -33,6 +33,8 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
   captures, with device-side timeout and host cleanup. No continuous light required.
 - Compact ingress workshop with dark/light/system themes, digit regions, zoom,
   static perspective correction, dry-run OCR and a dedicated history view.
+- Quarter turns and fine-angle straightening, saved per meter and applied before
+  OCR crops the digits. Original camera images stay unchanged.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 

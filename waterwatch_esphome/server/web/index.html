@@ -44,6 +44,7 @@
                 <div class="section-title"><h2>Meter image</h2><span id="imageStamp" class="muted">No image yet</span></div>
                 <div class="capture-actions"><button id="cameraPreview" class="secondary">Preview</button><button id="cameraTest" class="primary">Test OCR</button><button id="cameraCapture" class="quiet" title="Store a new capture and its reading result">Record reading</button><span id="captureStatus" class="muted">Not captured</span></div>
                 <div id="previewStage" class="preview-stage"><canvas id="preview" width="800" height="600" aria-label="Meter image. Drag to draw a region around each digit."></canvas><div id="previewEmpty" class="preview-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6h4l2-2h4l2 2h4v14H4z"/><circle cx="12" cy="13" r="4"/></svg><strong>Bring your meter into view</strong><span>Select a camera in settings, then preview.</span></div></div>
+                <div class="orientation-tools" role="group" aria-label="Image rotation"><span class="muted">Rotate</span><button id="rotateLeft" class="secondary" title="Rotate 90 degrees counterclockwise">↶ 90°</button><button id="rotateRight" class="secondary" title="Rotate 90 degrees clockwise">↷ 90°</button><label class="angle-label">Angle (°)<input id="rotation" type="number" min="-180" max="180" step="0.1" value="0" aria-label="Rotation angle in degrees"></label><input id="rotationSlider" type="range" min="-180" max="180" step="0.1" value="0" aria-label="Straighten image"><button id="resetRotation" class="quiet">Reset</button><span id="rotationStatus" class="muted">0° · Clockwise +</span></div>
                 <div class="image-tools"><div class="segmented" aria-label="Image view"><button id="overlay" class="quiet active">Aligned / regions</button><button id="original" class="quiet">Original</button></div><div class="region-actions"><span id="roiCount" class="muted">0 regions</span><button id="undoRoi" class="quiet">Undo region</button><button id="clearRois" class="quiet">Clear</button></div><label class="zoom-label">Zoom<input id="zoom" type="range" min="100" max="250" step="25" value="100" aria-label="Image zoom"><output id="zoomValue">100%</output></label></div>
                 <p class="image-help">Drag one box around each digit, left to right. Save regions before testing recognition.</p>
                 <section id="resultCard" class="result-card" aria-live="polite" hidden><div><span id="resultMode" class="eyebrow">OCR TEST</span><strong id="resultValue">—</strong></div><div><span id="resultReason" class="result-reason">—</span><small id="resultConfidence">—</small></div></section>
@@ -74,7 +75,7 @@
     </div>
     <p id="message" role="status" aria-live="polite"></p>
   </main>
-  <footer>WaterWatch <span>0.3.0 · Local OCR</span></footer>
+  <footer>WaterWatch <span>0.4.0 · Local OCR</span></footer>
   <script src="static/app.js" defer></script>
 </body>
 </html>

@@ -20,6 +20,7 @@ from server.config import Settings
 from server.home_assistant import CameraCollector, CameraError, HomeAssistantCamera
 from server.models import ManualReading, MeterConfig
 from server.mqtt import MqttBridge
+from server.ocr import align, decode, jpeg
 from server.service import Service, public_reading, token_hash
 
 bearer = HTTPBearer(auto_error=False)
@@ -79,7 +80,7 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
 
     app = FastAPI(
         title="WaterWatch",
-        version="0.3.0",
+        version="0.4.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -216,6 +217,26 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
     def capture(meter_id: str, test_only: bool = True):
         config(meter_id)
         return collector.capture(meter_id, test_only=test_only)
+
+    @app.post("/api/meters/{meter_id}/transform-image", dependencies=[Depends(admin)])
+    async def transform_image(
+        meter_id: str, request: Request,
+        rotation_degrees: float | None = Query(default=None, ge=-180, le=180),
+    ):
+        cfg = config(meter_id)
+        if rotation_degrees is not None:
+            cfg = cfg.model_copy(update={"rotation_degrees": rotation_degrees})
+        data = await image_body(request)
+
+        def render_transform():
+            with service.processing:
+                return jpeg(align(decode(data), cfg))
+
+        try:
+            result = await run_in_threadpool(render_transform)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        return Response(result, media_type="image/jpeg")
 
     @app.post("/api/meters", status_code=201, dependencies=[Depends(admin)])
     def register(cfg: MeterConfig):

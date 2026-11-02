@@ -1,5 +1,6 @@
 import csv
 import io
+import math
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -44,9 +45,30 @@ def decode(data: bytes):
     return image
 
 
+def rotate(image, degrees):
+    """Rotate clockwise without cropping. Quarter turns preserve source pixels."""
+    if degrees == 0:
+        return image
+    quarter_turns = {90: cv2.ROTATE_90_CLOCKWISE, -90: cv2.ROTATE_90_COUNTERCLOCKWISE,
+                     180: cv2.ROTATE_180, -180: cv2.ROTATE_180}
+    if degrees in quarter_turns:
+        return cv2.rotate(image, quarter_turns[degrees])
+    height, width = image.shape[:2]
+    matrix = cv2.getRotationMatrix2D(((width - 1) / 2, (height - 1) / 2), -degrees, 1)
+    cosine, sine = abs(matrix[0, 0]), abs(matrix[0, 1])
+    out_width = math.ceil(width * cosine + height * sine)
+    out_height = math.ceil(height * cosine + width * sine)
+    if out_width * out_height > 10_000_000 or max(out_width, out_height) >= 32767:
+        raise ValueError("Rotated image exceeds the 10 megapixel limit")
+    matrix[0, 2] += (out_width - width) / 2
+    matrix[1, 2] += (out_height - height) / 2
+    return cv2.warpAffine(image, matrix, (out_width, out_height),
+                          flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255))
+
+
 def align(image, cfg: MeterConfig):
     if cfg.perspective is None:
-        return image
+        return rotate(image, cfg.rotation_degrees)
     height, width = image.shape[:2]
     src = np.float32(cfg.perspective) * (width - 1, height - 1)
     dst = np.float32(
@@ -58,7 +80,8 @@ def align(image, cfg: MeterConfig):
         ]
     )
     matrix = cv2.getPerspectiveTransform(src.astype(np.float32), dst)
-    return cv2.warpPerspective(image, matrix, (cfg.aligned_width, cfg.aligned_height))
+    corrected = cv2.warpPerspective(image, matrix, (cfg.aligned_width, cfg.aligned_height))
+    return rotate(corrected, cfg.rotation_degrees)
 
 
 class TesseractEngine:
@@ -171,7 +194,8 @@ class Pipeline:
             raw_value=text,
             confidence=min(confidences),
             reason="candidate" if readable else "ambiguous_digit",
-            details={"digits": diagnostics, "engine": type(self.engine).__name__},
+            details={"digits": diagnostics, "engine": type(self.engine).__name__,
+                     "rotation_degrees": cfg.rotation_degrees},
             overlay=jpeg(overlay),
             processed=jpeg(np.hstack(previews)),
         )

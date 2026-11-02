@@ -4,6 +4,7 @@ const $ = id => document.getElementById(id);
 let token = "", meters = [], current = null, savedConfig = null, picture = null;
 let cameras = [], flashLights = [], historyRows = [], ingress = false, busy = false, dirty = false, jsonDraft = false;
 let showingOriginal = false, startPoint = null, draftPoint = null, layoutMeterId = null, messageTimer;
+let sourceBlob = null, transformEpoch = 0, transformAbort = null, rotationTimer, transformPending = false;
 const canvas = $("preview"), ctx = canvas.getContext("2d"), stage = $("previewStage");
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const reasons = {
@@ -66,10 +67,11 @@ function updateControls() {
   $("led").disabled = $("resolution").disabled = busy || fromHa;
   $("save").disabled = $("discard").disabled = busy || !dirty;
   $("undoRoi").disabled = $("clearRois").disabled = busy || !current?.config.rois.length;
-  $("original").disabled = $("overlay").disabled = busy || !current?.latest_capture?.image_key;
+  $("original").disabled = $("overlay").disabled = busy || !sourceBlob;
   $("zoom").disabled = busy || !picture;
   $("cameraPreview").textContent = dirty ? "Save & preview" : "Preview";
   $("cameraTest").textContent = dirty ? "Save & test OCR" : "Test OCR";
+  for (const id of ["rotateLeft","rotateRight","rotation","rotationSlider","resetRotation"]) $(id).disabled = busy || !current;
 }
 function sourceControls() {
   const fromHa = $("sourceKind").value === "home_assistant";
@@ -91,6 +93,8 @@ function renderConfig() {
   $("config").value = JSON.stringify(cfg, null, 2);
   for (const [id,value] of Object.entries({decimals:cfg.decimal_places,threshold:cfg.min_confidence,maxRate:cfg.max_rate_lph,interval:cfg.camera.interval_seconds,led:cfg.camera.led_duty,resolution:cfg.camera.resolution,sourceKind:cfg.source.kind,flashBrightness:cfg.source.flash?.brightness_pct ?? 20})) $(id).value = value;
   $("scheduledCapture").checked = cfg.source.enabled; $("flashEnabled").checked = Boolean(cfg.source.flash);
+  $("rotation").value = $("rotationSlider").value = cfg.rotation_degrees ?? 0;
+  $("rotationStatus").textContent = `${cfg.rotation_degrees || 0}° · Clockwise +`;
   renderChoices("cameraEntity", cameras, cfg.source.camera_entity, "Select a camera");
   renderChoices("flashEntity", flashLights, cfg.source.flash?.light_entity, "Select the meter’s ESPHome light");
   sourceControls(); updateRegionCount();
@@ -100,6 +104,7 @@ function editedConfig() {
   cfg.decimal_places = Number($("decimals").value); cfg.min_confidence = Number($("threshold").value);
   cfg.max_rate_lph = Number($("maxRate").value); cfg.camera.interval_seconds = Number($("interval").value);
   cfg.camera.led_duty = Number($("led").value); cfg.camera.resolution = $("resolution").value;
+  cfg.rotation_degrees = Number($("rotation").value);
   const fromHa = $("sourceKind").value === "home_assistant";
   cfg.source = {kind:$("sourceKind").value,camera_entity:fromHa ? $("cameraEntity").value : null,enabled:fromHa && $("scheduledCapture").checked,flash:fromHa && $("flashEnabled").checked ? {light_entity:$("flashEntity").value,brightness_pct:Number($("flashBrightness").value),settle_ms:cfg.source.flash?.settle_ms ?? 1500} : null};
   return cfg;
@@ -107,7 +112,7 @@ function editedConfig() {
 async function saveConfiguration(notify = true) {
   if (!current) throw new Error("Add a meter first.");
   if (jsonDraft) throw new Error("Apply the JSON to the editor before saving, or discard your changes.");
-  const numericFields = ["decimals","threshold","maxRate","interval"];
+  const numericFields = ["decimals","threshold","maxRate","interval","rotation"];
   if ($("sourceKind").value === "home_assistant" && $("flashEnabled").checked) numericFields.push("flashBrightness");
   if ($("sourceKind").value === "upload") numericFields.push("led");
   for (const id of numericFields) {
@@ -119,6 +124,7 @@ async function saveConfiguration(notify = true) {
   if (cfg.source.flash && !cfg.source.flash.light_entity) throw new Error("Select the meter’s ESPHome flash light.");
   await api(`/api/meters/${selected()}`, {method:"PUT",body:JSON.stringify(cfg)});
   current.config = cfg; savedConfig = structuredClone(cfg); setDirty(false); renderConfig(); updateHint();
+  if (sourceBlob) await renderSourceImage();
   if (notify) message("Configuration saved.");
 }
 function showView(name) {
@@ -161,7 +167,7 @@ $("zoom").oninput = resizePreview;
 function drawPreview() {
   ctx.clearRect(0, 0, canvas.width, canvas.height); $("previewEmpty").hidden = Boolean(picture);
   if (picture) ctx.drawImage(picture, 0, 0, canvas.width, canvas.height);
-  if (current && !(showingOriginal && current.config.perspective)) {
+  if (current && !showingOriginal) {
     ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.font = `${Math.max(15, canvas.width / 45)}px sans-serif`;
     current.config.rois.forEach((roi, index) => { const x=roi.x*canvas.width,y=roi.y*canvas.height;ctx.strokeStyle="#8ff5bc";ctx.strokeRect(x,y,roi.w*canvas.width,roi.h*canvas.height);ctx.fillStyle="#123a2a";ctx.fillRect(x,y,25,23);ctx.fillStyle="#c5ffdd";ctx.fillText(String(index+1),x+5,y+18); });
     if (startPoint && draftPoint) { ctx.strokeStyle="#ffffff";ctx.setLineDash([5,4]);ctx.strokeRect(startPoint.x*canvas.width,startPoint.y*canvas.height,(draftPoint.x-startPoint.x)*canvas.width,(draftPoint.y-startPoint.y)*canvas.height);ctx.setLineDash([]); }
@@ -169,18 +175,62 @@ function drawPreview() {
   $("original").classList.toggle("active", showingOriginal); $("overlay").classList.toggle("active", !showingOriginal);
   updateRegionCount(); resizePreview();
 }
-async function setPicture(blob) {
-  picture?.close(); picture = await createImageBitmap(blob);
+async function setPicture(blob, epoch = transformEpoch) {
+  const decoded = await createImageBitmap(blob);
+  if (epoch !== transformEpoch) { decoded.close(); return; }
+  picture?.close(); picture = decoded;
   canvas.width = picture.width; canvas.height = picture.height; $("zoom").value = 100; drawPreview(); updateControls();
 }
+async function renderSourceImage() {
+  clearTimeout(rotationTimer);
+  const epoch = ++transformEpoch;
+  transformAbort?.abort(); transformAbort = new AbortController();
+  if (!sourceBlob || !current) { transformPending = false; return; }
+  transformPending = true; $("rotationStatus").textContent = "Updating preview…";
+  const cfg = current.config, original = showingOriginal;
+  try {
+    let blob = sourceBlob;
+    if (!original && (cfg.rotation_degrees || cfg.perspective)) {
+      const response = await api(`/api/meters/${selected()}/transform-image?rotation_degrees=${encodeURIComponent(cfg.rotation_degrees || 0)}`, {method:"POST",body:blob,headers:{"Content-Type":blob.type || "application/octet-stream"},signal:transformAbort.signal});
+      blob = await response.blob();
+    }
+    if (epoch === transformEpoch) await setPicture(blob, epoch);
+  } catch (error) {
+    if (epoch === transformEpoch && error.name !== "AbortError") { picture?.close(); picture=null; drawPreview(); message(error.message,true); }
+  } finally {
+    if (epoch === transformEpoch) { transformPending=false; $("rotationStatus").textContent = original ? "Original image" : `${cfg.rotation_degrees || 0}° · Clockwise +`; updateControls(); }
+  }
+}
+function changeRotation(value) {
+  if (!current || jsonDraft) { if(jsonDraft) message("Apply or discard the JSON edit before rotating.",true); return; }
+  const angle = Math.round(Number(value)*10)/10;
+  if (!Number.isFinite(angle) || angle < -180 || angle > 180) return;
+  $("rotation").value = $("rotationSlider").value = angle;
+  if (angle === (current.config.rotation_degrees || 0)) return;
+  current.config.rotation_degrees=angle; current.config.rois=[];
+  $("resultCard").hidden=true; $("testResult").textContent=""; $("processed").hidden=true;
+  startPoint=null; draftPoint=null; showingOriginal=false;
+  $("config").value=JSON.stringify(editedConfig(),null,2); setDirty(); updateRegionCount(); updateHint(); drawPreview();
+  clearTimeout(rotationTimer); transformEpoch++; transformAbort?.abort();
+  transformPending=Boolean(sourceBlob); $("rotationStatus").textContent=sourceBlob?"Updating preview…":`${angle}° · Clockwise +`;
+  rotationTimer=setTimeout(()=>{void renderSourceImage();},180);
+  message("Rotation changed. Draw new digit regions, then save.");
+}
+$("rotateLeft").onclick=()=>changeRotation(((Number($("rotation").value)-90+540)%360)-180);
+$("rotateRight").onclick=()=>changeRotation(((Number($("rotation").value)+90+540)%360)-180);
+$("resetRotation").onclick=()=>changeRotation(0);
+$("rotation").oninput=()=>{const value=$("rotation").value;if(value.trim()==="" || !Number.isFinite(Number(value)) || Number(value)<-180 || Number(value)>180){setDirty();message("Use an angle from -180° to 180°.",true);return;}changeRotation(value);};
+$("rotationSlider").oninput=()=>changeRotation($("rotationSlider").value);
 async function loadImage(variant = "overlay") {
-  picture?.close(); picture = null; showingOriginal = variant === "original"; $("processed").hidden = true;
+  transformEpoch++; transformAbort?.abort(); clearTimeout(rotationTimer);
+  sourceBlob=null; transformPending=false; picture?.close(); picture = null; showingOriginal = variant === "original"; $("processed").hidden = true;
   const row = current?.latest_capture;
   if (!row?.image_key) { $("imageStamp").textContent = "No image yet"; drawPreview(); return; }
   try {
-    const response = await api(`/api/meters/${selected()}/images/${row.event_id}/${variant}`);
-    await setPicture(await response.blob()); $("imageStamp").textContent = `Recorded · ${new Date(row.captured_at).toLocaleString()}`;
+    const response = await api(`/api/meters/${selected()}/images/${row.event_id}/original`);
+    sourceBlob=await response.blob(); await renderSourceImage(); $("imageStamp").textContent = `Capture · ${new Date(row.captured_at).toLocaleString()}`;
   } catch (error) { drawPreview(); message(`Image: ${error.message}`, true); }
+  if ((row.details?.rotation_degrees ?? 0) !== (current.config.rotation_degrees || 0)) return;
   try {
     const response = await api(`/api/meters/${selected()}/images/${row.event_id}/processed`);
     const oldUrl = $("processed").dataset.url; if (oldUrl) URL.revokeObjectURL(oldUrl);
@@ -251,7 +301,7 @@ function renderResult(result, testOnly) {
 }
 
 $("loginForm").onsubmit=act(async()=>{token=$("token").value;try{await refresh();$("token").value="";$("login").hidden=true;$("workspace").hidden=false;$("logout").hidden=false;requestAnimationFrame(resizePreview);}catch(error){token="";throw error;}});
-$("logout").onclick=()=>{token="";current=null;savedConfig=null;meters=[];historyRows=[];setDirty(false);$("workspace").hidden=true;$("login").hidden=false;$("logout").hidden=true;$("cameraToken").textContent="";$("uploadToken").value="";$("manualValue").value="";$("manualReason").value="";$("newName").value="";$("newId").value="";$("history").replaceChildren();$("testResult").textContent="";$("resultCard").hidden=true;$("processed").hidden=true;$("processed").removeAttribute("src");if($("processed").dataset.url)URL.revokeObjectURL($("processed").dataset.url);picture?.close();picture=null;drawPreview();message("");};
+$("logout").onclick=()=>{token="";current=null;savedConfig=null;meters=[];historyRows=[];setDirty(false);$("workspace").hidden=true;$("login").hidden=false;$("logout").hidden=true;$("cameraToken").textContent="";$("uploadToken").value="";$("manualValue").value="";$("manualReason").value="";$("newName").value="";$("newId").value="";$("history").replaceChildren();$("testResult").textContent="";$("resultCard").hidden=true;$("processed").hidden=true;$("processed").removeAttribute("src");if($("processed").dataset.url)URL.revokeObjectURL($("processed").dataset.url);transformEpoch++;transformAbort?.abort();clearTimeout(rotationTimer);sourceBlob=null;picture?.close();picture=null;drawPreview();message("");};
 $("refresh").onclick=act(refresh);
 $("meter").onchange=act(async()=>{if(dirty){$("meter").value=selected();throw new Error("Save or discard changes before switching meters.");}await renderMeter();});
 $("add").onclick=()=>{$("registration").hidden=!$("registration").hidden;if(!$("registration").hidden)$("newName").focus();};
@@ -261,24 +311,24 @@ $("newId").oninput=()=>{customId=Boolean($("newId").value);};
 $("newName").oninput=()=>{if(!customId)$("newId").value=$("newName").value.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);};
 $("registerForm").onsubmit=act(async()=>{if(dirty)throw new Error("Save or discard changes before adding a meter.");const data=await(await api("/api/meters",{method:"POST",body:JSON.stringify({id:$("newId").value,name:$("newName").value})})).json();$("cameraToken").textContent=`${data.config.name} upload token (shown once): ${data.camera_token}`;$("cameraToken").dataset.meter=data.config.id;await refresh();$("meter").value=data.config.id;await renderMeter();$("registration").hidden=true;showView("capture");message("Meter created. Select Home Assistant camera, then find your devices.");});
 $("save").onclick=act(()=>saveConfiguration());
-$("discard").onclick=()=>{if(!current||!savedConfig)return;current.config=structuredClone(savedConfig);renderConfig();setDirty(false);drawPreview();updateHint();message("Unsaved changes discarded.");};
+$("discard").onclick=()=>{if(!current||!savedConfig)return;current.config=structuredClone(savedConfig);renderConfig();setDirty(false);void renderSourceImage();drawPreview();updateHint();message("Unsaved changes discarded.");};
 for(const element of document.querySelectorAll(".settings-column input, .settings-column select")){element.addEventListener("input",()=>{sourceControls();setDirty();});}
 $("config").oninput=()=>{jsonDraft=true;setDirty();};
-$("loadJson").onclick=()=>{try{const cfg=JSON.parse($("config").value);if(cfg.id!==selected())throw new Error("Meter ID cannot change.");if(!cfg.camera||!cfg.source||!Array.isArray(cfg.rois))throw new Error("Configuration must include camera, source and digit regions.");current.config=cfg;renderConfig();setDirty();drawPreview();message("JSON loaded into the editor. Save to apply.");}catch(error){message(error.message,true);}};
+$("loadJson").onclick=()=>{try{const cfg=JSON.parse($("config").value);if(cfg.id!==selected())throw new Error("Meter ID cannot change.");if(!cfg.camera||!cfg.source||!Array.isArray(cfg.rois))throw new Error("Configuration must include camera, source and digit regions.");current.config=cfg;renderConfig();setDirty();drawPreview();void renderSourceImage();message("JSON loaded into the editor. Save to apply.");}catch(error){message(error.message,true);}};
 function point(event){const box=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(event.clientX-box.left)/box.width)),y:Math.max(0,Math.min(1,(event.clientY-box.top)/box.height))};}
-canvas.onpointerdown=event=>{if(!current||!picture||busy)return;if(showingOriginal&&current.config.perspective){message("Use the aligned image to edit perspective-corrected digit regions.",true);return;}startPoint=point(event);draftPoint=startPoint;canvas.setPointerCapture(event.pointerId);};
+canvas.onpointerdown=event=>{if(!current||!picture||busy||transformPending)return;if(showingOriginal){message("Switch to Aligned / regions before drawing digit boxes.",true);return;}if(JSON.stringify(current.config.perspective)!==JSON.stringify(savedConfig?.perspective)){message("Save perspective settings before drawing digit regions.",true);return;}startPoint=point(event);draftPoint=startPoint;canvas.setPointerCapture(event.pointerId);};
 canvas.onpointermove=event=>{if(startPoint){draftPoint=point(event);drawPreview();}};
 canvas.onpointerup=event=>{if(!startPoint||!current)return;const end=point(event),roi={x:Math.min(startPoint.x,end.x),y:Math.min(startPoint.y,end.y),w:Math.abs(startPoint.x-end.x),h:Math.abs(startPoint.y-end.y)};startPoint=null;draftPoint=null;if(roi.w>.005&&roi.h>.005){if(current.config.rois.length>=12)message("Up to 12 digit regions are supported.",true);else{current.config.rois.push(roi);$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();}}drawPreview();};
 canvas.onpointercancel=()=>{startPoint=null;draftPoint=null;drawPreview();};
 $("undoRoi").onclick=()=>{if(current){current.config.rois.pop();$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();drawPreview();}};
 $("clearRois").onclick=()=>{if(current){current.config.rois=[];$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();drawPreview();}};
-$("original").onclick=act(()=>loadImage("original"));$("overlay").onclick=act(()=>loadImage("overlay"));
+$("original").onclick=act(async()=>{showingOriginal=true;await renderSourceImage();});$("overlay").onclick=act(async()=>{showingOriginal=false;await renderSourceImage();});
 $("loadCameras").onclick=act(async()=>{const camera=$("cameraEntity").value,light=$("flashEntity").value;[cameras,flashLights]=await Promise.all([api("/api/home-assistant/cameras").then(response=>response.json()),api("/api/home-assistant/flash-lights").then(response=>response.json())]);renderChoices("cameraEntity",cameras,camera,"Select a camera");renderChoices("flashEntity",flashLights,light,"Select the meter’s ESPHome light");message(cameras.length?"Devices loaded. Select your meter camera and optional flash light.":"No cameras found in Home Assistant.");});
-$("cameraPreview").onclick=act(async()=>{if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const response=await api(`/api/meters/${selected()}/camera-image`,{method:"POST"});showingOriginal=true;await setPicture(await response.blob());$("imageStamp").textContent="Live preview · Not recorded";$("processed").hidden=true;message(current.config.perspective?"Preview uses the original image. Record a capture to edit aligned regions.":"Draw a box around each digit, then save and test OCR.");});
+$("cameraPreview").onclick=act(async()=>{if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const response=await api(`/api/meters/${selected()}/camera-image`,{method:"POST"});sourceBlob=await response.blob();showingOriginal=false;await renderSourceImage();$("imageStamp").textContent="Live preview · Not recorded";$("processed").hidden=true;message("Rotate the image to level the digits, then draw one box per digit and save.");});
 async function captureCamera(testOnly){if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const result=await(await api(`/api/meters/${selected()}/capture?test_only=${testOnly}`,{method:"POST"})).json();if(!testOnly)await refresh();renderResult(result,testOnly);$("captureStatus").textContent=testOnly?"Test complete · Not recorded":"Capture recorded";message(testOnly?"Test complete. The last preview remains displayed; reading history is unchanged.":"Capture recorded. Review its result in History.");}
 $("cameraTest").onclick=act(()=>captureCamera(true));
 $("cameraCapture").onclick=act(async()=>{if(dirty)throw new Error("Save configuration before recording a reading.");await captureCamera(false);});
-async function uploaded(testOnly){if(!selected())throw new Error("Add a meter first.");if(dirty)throw new Error("Save configuration before testing or recording an upload.");const file=$("upload").files[0];if(!file)throw new Error("Select a JPEG or PNG first.");const now=encodeURIComponent(new Date().toISOString());const path=testOnly?`/api/meters/${selected()}/test?captured_at=${now}`:`/api/device/${selected()}/images?captured_at=${now}&event_id=${crypto.randomUUID()}`;const result=await(await api(path,{method:"POST",headers:{"Content-Type":file.type},body:file},testOnly?token:$("uploadToken").value)).json();if(!testOnly)await refresh();renderResult(result,testOnly);if(testOnly){showingOriginal=true;await setPicture(file);$("imageStamp").textContent="Uploaded test · Not recorded";}}
+async function uploaded(testOnly){if(!selected())throw new Error("Add a meter first.");if(dirty)throw new Error("Save configuration before testing or recording an upload.");const file=$("upload").files[0];if(!file)throw new Error("Select a JPEG or PNG first.");const now=encodeURIComponent(new Date().toISOString());const path=testOnly?`/api/meters/${selected()}/test?captured_at=${now}`:`/api/device/${selected()}/images?captured_at=${now}&event_id=${crypto.randomUUID()}`;const result=await(await api(path,{method:"POST",headers:{"Content-Type":file.type},body:file},testOnly?token:$("uploadToken").value)).json();if(!testOnly)await refresh();renderResult(result,testOnly);if(testOnly){sourceBlob=file;showingOriginal=false;await renderSourceImage();$("imageStamp").textContent="Uploaded test · Not recorded";}}
 $("testImage").onclick=act(()=>uploaded(true));$("submitImage").onclick=act(()=>uploaded(false));
 $("manualForm").onsubmit=act(async()=>{if(dirty)throw new Error("Save or discard configuration changes before recording a baseline.");await api(`/api/meters/${selected()}/manual`,{method:"POST",body:JSON.stringify({value_m3:$("manualValue").value,kind:$("manualKind").value,reason:$("manualReason").value})});await refresh();$("manualReason").value="";message("Verified baseline recorded. Previous history is preserved.");});
 async function download(path,name){const response=await api(path);const url=URL.createObjectURL(await response.blob());const anchor=document.createElement("a");anchor.href=url;anchor.download=name;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}

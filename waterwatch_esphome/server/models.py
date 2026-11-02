@@ -99,6 +99,8 @@ class MeterConfig(StrictModel):
     max_rate_gap_seconds: int = Field(default=1800, ge=60, le=86400)
     # Optional normalized TL, TR, BR, BL points in the SOURCE image.
     perspective: list[tuple[float, float]] | None = None
+    # Clockwise, after perspective correction; ROIs refer to this final image.
+    rotation_degrees: float = Field(default=0, ge=-180, le=180)
     aligned_width: int = Field(default=800, ge=100, le=1600)
     aligned_height: int = Field(default=600, ge=100, le=1200)
     camera: CameraConfig = Field(default_factory=CameraConfig)

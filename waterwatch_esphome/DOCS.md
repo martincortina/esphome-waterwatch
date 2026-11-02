@@ -82,6 +82,12 @@ The local-ZIP method below is an alternative for manual installations.
   mobile. Advanced settings and uploaded images are collapsed by default.
 - Draw one region per digit, left to right. Zoom in for detail, undo the last region,
   or clear regions. A draft outline follows your pointer while drawing.
+- Use **↶ 90° / ↷ 90°** below the image for quarter turns, or **Angle / the
+  straightening slider** for a precise angle from -180° to 180° (positive is
+  clockwise). Rotate until the digits are horizontal, then draw their regions and
+  save. The angle is stored per meter and applies to both preview and host OCR.
+  Changing it clears the previous regions; Discard restores the saved calibration.
+  Original shows the unchanged source image. Rotation never triggers another flash.
 - The save bar shows unsaved changes. **Save & preview** and **Save & test OCR** save
   the edited configuration before that action. **Discard changes** restores the last
   saved configuration. Refresh and meter switching preserve unsaved work until you
@@ -91,6 +97,13 @@ The local-ZIP method below is an alternative for manual installations.
 - A camera OCR test uses a new capture; the last displayed preview stays in place.
   Test results are labelled **Not recorded**. Record reading explicitly stores a
   capture and its result. MQTT publication still depends on the add-on option.
+
+Perspective points remain in the original source-image coordinates. Processing order
+is source image → perspective correction (if configured) → rotation → digit regions.
+The preview uses the same server transform as OCR. Quarter turns preserve pixels;
+fine-angle rotation expands the canvas with white borders so the image is not cropped.
+Old configurations default to 0°. Stored source images and historic readings remain
+unchanged. Arbitrary-angle output is limited to 10 megapixels to bound memory use.
 
 ## Recognition boundaries
 

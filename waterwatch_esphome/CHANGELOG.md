@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Rotate photographs by 90 degrees or fine-tune any angle to level the meter digits.
+- Saved orientation applies to previews and host OCR; source images stay unchanged.
+- Shared server transformation keeps preview geometry and digit crops consistent.
+- Rotation changes clear previous digit regions so they can be redrawn correctly.
+
 ## 0.3.0
 
 - Compact, responsive camera/calibration workspace with a dedicated history view.

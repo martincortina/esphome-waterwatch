@@ -7,6 +7,8 @@ baseline/correction events and history.
 
 The compact workshop offers Dark, Light and System appearance, camera controls
 beside the image, collapsible settings, region zoom/undo and a separate history view.
+Quarter-turn and fine-angle rotation let you level the digits before calibration;
+the saved orientation is also used by OCR.
 
 Optional flash capture briefly illuminates only the selected ESPHome meter light,
 then turns it off before OCR. Flash and scheduled capture are disabled by default.
