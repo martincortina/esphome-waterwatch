@@ -5,6 +5,9 @@ Assistant, recognizes a mechanical water counter on the host, and keeps an audit
 ledger. Open Web UI provides image previews, digit region calibration, dry-run OCR,
 baseline/correction events and history.
 
+The compact workshop offers Dark, Light and System appearance, camera controls
+beside the image, collapsible settings, region zoom/undo and a separate history view.
+
 Optional flash capture briefly illuminates only the selected ESPHome meter light,
 then turns it off before OCR. Flash and scheduled capture are disabled by default.
 

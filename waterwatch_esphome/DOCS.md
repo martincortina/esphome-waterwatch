@@ -10,7 +10,7 @@ The local-ZIP method below is an alternative for manual installations.
    Do not overwrite an existing pulse-counter configuration.
 2. Mount/focus the camera rigidly on the water meter. The onboard light starts off.
    For flash photographs, select its ESPHome light entity in WaterWatch, enable
-   **Flash the meter light for each picture**, choose brightness (start at 20%), and
+   **Flash for each picture**, choose brightness (start at 20%), and
    save. Keep this light off between pictures. Preview, test and recorded/scheduled
    captures then use the same flash sequence. No firmware update is needed for an
    existing ESPHome monochromatic LED. Confirm orientation, focus and every digit.
@@ -72,6 +72,25 @@ The local-ZIP method below is an alternative for manual installations.
   header trust disabled. There is no additional password or exposed host port.
 - Supervisor and broker credentials stay in memory. Exported meter JSON has no
   credentials. Backups stop the add-on so SQLite and images can be copied consistently.
+
+## Workshop layout
+
+- **Appearance** at the top offers Dark, Light and System. Dark is the default; only
+  this preference is stored in the browser. Credentials stay in memory.
+- **Capture & calibrate** puts Preview, Test OCR and Record reading next to the image.
+  Camera/flash and recognition settings sit beside it on desktop and below it on
+  mobile. Advanced settings and uploaded images are collapsed by default.
+- Draw one region per digit, left to right. Zoom in for detail, undo the last region,
+  or clear regions. A draft outline follows your pointer while drawing.
+- The save bar shows unsaved changes. **Save & preview** and **Save & test OCR** save
+  the edited configuration before that action. **Discard changes** restores the last
+  saved configuration. Refresh and meter switching preserve unsaved work until you
+  save or discard it. Edited JSON must first be applied to the editor.
+- **History** contains the counter graph, reading filters, exported logs, and manual
+  baseline/correction events. An OCR test leaves the reading history unchanged.
+- A camera OCR test uses a new capture; the last displayed preview stays in place.
+  Test results are labelled **Not recorded**. Record reading explicitly stores a
+  capture and its result. MQTT publication still depends on the add-on option.
 
 ## Recognition boundaries
 

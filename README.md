@@ -5,6 +5,11 @@ run OpenCV/Tesseract recognition locally on the **Home Assistant host**.
 
 [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fmartincortina%2Fesphome-waterwatch)
 
+![Dark workshop with synthetic demonstration data](docs/webui-dark-0.3.0.jpg)
+
+*Interface preview uses synthetic meter data and a test recognizer; it is not a
+measurement of real-meter OCR accuracy.*
+
 ## Install
 
 1. In Home Assistant, open **Settings → Apps/Add-ons → Store → ⋮ → Repositories**.
@@ -26,7 +31,8 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
 - Native ESPHome camera transport through HA; images remain on your own host.
 - Optional brief LED illumination for each preview or OCR reading; LED off between
   captures, with device-side timeout and host cleanup. No continuous light required.
-- Ingress workshop, digit regions, static perspective correction and dry-run OCR.
+- Compact ingress workshop with dark/light/system themes, digit regions, zoom,
+  static perspective correction, dry-run OCR and a dedicated history view.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 

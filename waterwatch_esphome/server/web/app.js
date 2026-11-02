@@ -1,135 +1,288 @@
-/* All secrets stay in memory. No CDN, telemetry, local storage or token URLs. */
+/* Credentials stay in memory. Only the appearance preference is stored locally. */
 "use strict";
 const $ = id => document.getElementById(id);
-let token = "", meters = [], current = null, picture = null, showingOriginal = false, startPoint = null;
-let cameras = [], flashLights = [], ingress = false;
-const canvas = $("preview"), ctx = canvas.getContext("2d");
-const objectUrls = new Map();
-function message(text) { $("message").textContent = text; }
+let token = "", meters = [], current = null, savedConfig = null, picture = null;
+let cameras = [], flashLights = [], historyRows = [], ingress = false, busy = false, dirty = false, jsonDraft = false;
+let showingOriginal = false, startPoint = null, draftPoint = null, layoutMeterId = null, messageTimer;
+const canvas = $("preview"), ctx = canvas.getContext("2d"), stage = $("previewStage");
+const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+const reasons = {
+  ok:"Verified", candidate:"Recognized", accepted:"Accepted", stale:"Reading is stale",
+  baseline_required:"Baseline required", manual_baseline:"Verified manually", roi_not_configured:"Set digit regions",
+  ambiguous_digit:"Ambiguous digit", poor_image_quality:"Image needs adjustment", unreadable:"Unreadable",
+  camera_unavailable:"Camera unavailable", camera_repeated_frame:"Repeated camera image",
+  flash_light_must_be_off:"Turn the meter light off before a flash capture",
+  flash_capture_timed_out:"Flash capture timed out. Check the camera connection",
+  not_captured:"No capture yet", test_complete:"Test complete", captured:"Capture recorded",
+  home_assistant_not_configured:"Home Assistant camera access is unavailable",
+  home_assistant_camera_not_selected:"Select and save a Home Assistant camera first"
+};
+function readable(value) { return reasons[value] || String(value || "Unknown").replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
+function message(text, error = false) {
+  clearTimeout(messageTimer); $("message").textContent = text; $("message").classList.toggle("error", error);
+  if (text && !error) messageTimer = setTimeout(() => { $("message").textContent = ""; }, 6500);
+}
+function applyTheme() {
+  const preference = $("theme").value;
+  document.documentElement.dataset.theme = preference === "system" ? (systemTheme.matches ? "dark" : "light") : preference;
+  drawGraph(historyRows);
+}
+try { const choice = localStorage.getItem("waterwatch-theme"); if (["dark","light","system"].includes(choice)) $("theme").value = choice; } catch { /* Storage is optional in embedded views. */ }
+$("theme").onchange = () => { applyTheme(); try { localStorage.setItem("waterwatch-theme", $("theme").value); } catch { /* Keep the in-memory choice. */ } };
+systemTheme.addEventListener("change", () => { if ($("theme").value === "system") applyTheme(); });
+applyTheme();
+
 async function api(path, options = {}, credential = token) {
-  const headers = {...(credential ? {Authorization: `Bearer ${credential}`} : {}), ...options.headers};
-  if (options.body && typeof options.body === "string") headers["Content-Type"] = "application/json";
+  const headers = {...(credential ? {Authorization:`Bearer ${credential}`} : {}), ...options.headers};
+  if (typeof options.body === "string") headers["Content-Type"] = "application/json";
   const response = await fetch(new URL(path.replace(/^\/+/, ""), document.baseURI), {...options, headers});
-  if (!response.ok) { let body; try { body = await response.json(); } catch { body = {}; } throw new Error(JSON.stringify(body.detail || response.statusText)); }
+  if (!response.ok) {
+    let body; try { body = await response.json(); } catch { body = {}; }
+    const detail = body.detail || response.statusText;
+    throw new Error(Array.isArray(detail) ? detail.map(item => item.msg).join(". ") : readable(detail));
+  }
   return response;
 }
-function act(fn) { return async event => { event?.preventDefault(); try { await fn(event); } catch (error) { message(error.message); } }; }
+function act(fn) {
+  return async event => {
+    event?.preventDefault(); if (busy) return;
+    busy = true; updateControls(); message("");
+    try { await fn(event); } catch (error) { message(error.message, true); }
+    finally { busy = false; updateControls(); }
+  };
+}
 function selected() { return current?.config.id; }
+function setDirty(value = true) {
+  dirty = value; $("saveState").textContent = value ? "Unsaved changes" : "All changes saved";
+  $("saveState").classList.toggle("dirty", value); updateControls();
+}
+function updateControls() {
+  $("workspace").setAttribute("aria-busy", String(busy)); $("busyStatus").hidden = !busy;
+  for (const element of document.querySelectorAll("#workspace button, #workspace input, #workspace select, #workspace textarea")) element.disabled = busy;
+  $("logout").disabled = busy;
+  const fromHa = $("sourceKind").value === "home_assistant";
+  for (const id of ["cameraEntity","flashEnabled","scheduledCapture","cameraPreview","cameraTest","cameraCapture"]) $(id).disabled = busy || !fromHa;
+  for (const id of ["flashEntity","flashBrightness"]) $(id).disabled = busy || !fromHa || !$("flashEnabled").checked;
+  $("led").disabled = $("resolution").disabled = busy || fromHa;
+  $("save").disabled = $("discard").disabled = busy || !dirty;
+  $("undoRoi").disabled = $("clearRois").disabled = busy || !current?.config.rois.length;
+  $("original").disabled = $("overlay").disabled = busy || !current?.latest_capture?.image_key;
+  $("zoom").disabled = busy || !picture;
+  $("cameraPreview").textContent = dirty ? "Save & preview" : "Preview";
+  $("cameraTest").textContent = dirty ? "Save & test OCR" : "Test OCR";
+}
+function sourceControls() {
+  const fromHa = $("sourceKind").value === "home_assistant";
+  if (!fromHa) { $("scheduledCapture").checked = false; $("flashEnabled").checked = false; }
+  $("haSourceFields").hidden = !fromHa; $("flashFields").hidden = !fromHa || !$("flashEnabled").checked;
+  $("uploadDeviceSettings").hidden = fromHa; $("haSettingsNote").hidden = !fromHa;
+  updateControls();
+}
+function renderChoices(id, choices, selectedEntity, placeholder) {
+  const list = [...choices];
+  if (selectedEntity && !list.some(item => item.entity_id === selectedEntity)) list.push({entity_id:selectedEntity,name:selectedEntity,state:"saved"});
+  $(id).replaceChildren(new Option(placeholder, ""), ...list.map(item => new Option(`${item.name} (${item.state})`, item.entity_id)));
+  $(id).value = selectedEntity || "";
+}
 function renderConfig() {
   if (!current) return;
-  const c = current.config;
-  $("config").value = JSON.stringify(c, null, 2);
-  $("decimals").value = c.decimal_places; $("threshold").value = c.min_confidence;
-  $("maxRate").value = c.max_rate_lph; $("interval").value = c.camera.interval_seconds;
-  $("led").value = c.camera.led_duty; $("resolution").value = c.camera.resolution;
-  $("sourceKind").value = c.source.kind;
-  $("scheduledCapture").checked = c.source.enabled;
-  $("flashEnabled").checked = Boolean(c.source.flash);
-  $("flashBrightness").value = c.source.flash?.brightness_pct ?? 20;
-  renderCameras(c.source.camera_entity);
-  renderFlashLights(c.source.flash?.light_entity);
-  $("led").disabled = $("resolution").disabled = c.source.kind === "home_assistant";
-  sourceControls();
+  const cfg = current.config;
+  jsonDraft = false;
+  $("config").value = JSON.stringify(cfg, null, 2);
+  for (const [id,value] of Object.entries({decimals:cfg.decimal_places,threshold:cfg.min_confidence,maxRate:cfg.max_rate_lph,interval:cfg.camera.interval_seconds,led:cfg.camera.led_duty,resolution:cfg.camera.resolution,sourceKind:cfg.source.kind,flashBrightness:cfg.source.flash?.brightness_pct ?? 20})) $(id).value = value;
+  $("scheduledCapture").checked = cfg.source.enabled; $("flashEnabled").checked = Boolean(cfg.source.flash);
+  renderChoices("cameraEntity", cameras, cfg.source.camera_entity, "Select a camera");
+  renderChoices("flashEntity", flashLights, cfg.source.flash?.light_entity, "Select the meter’s ESPHome light");
+  sourceControls(); updateRegionCount();
 }
-function sourceControls(){const fromHa=$("sourceKind").value==="home_assistant";$("scheduledCapture").disabled=$("flashEnabled").disabled=!fromHa;if(!fromHa){$("scheduledCapture").checked=false;$("flashEnabled").checked=false;}for(const id of ["cameraEntity","cameraPreview","cameraTest","cameraCapture"])$(id).disabled=!fromHa;for(const id of ["flashEntity","flashBrightness"])$(id).disabled=!fromHa||!$("flashEnabled").checked;}
-$("sourceKind").onchange=sourceControls;
-$("flashEnabled").onchange=sourceControls;
-function renderCameras(selectedEntity) {
-  const choices = [...cameras];
-  if (selectedEntity && !choices.some(c => c.entity_id === selectedEntity)) choices.push({entity_id:selectedEntity,name:selectedEntity,state:"not checked"});
-  $("cameraEntity").replaceChildren(new Option("Select a camera", ""), ...choices.map(c => new Option(`${c.name} (${c.state})`, c.entity_id)));
-  $("cameraEntity").value = selectedEntity || "";
+function editedConfig() {
+  const cfg = structuredClone(current.config);
+  cfg.decimal_places = Number($("decimals").value); cfg.min_confidence = Number($("threshold").value);
+  cfg.max_rate_lph = Number($("maxRate").value); cfg.camera.interval_seconds = Number($("interval").value);
+  cfg.camera.led_duty = Number($("led").value); cfg.camera.resolution = $("resolution").value;
+  const fromHa = $("sourceKind").value === "home_assistant";
+  cfg.source = {kind:$("sourceKind").value,camera_entity:fromHa ? $("cameraEntity").value : null,enabled:fromHa && $("scheduledCapture").checked,flash:fromHa && $("flashEnabled").checked ? {light_entity:$("flashEntity").value,brightness_pct:Number($("flashBrightness").value),settle_ms:cfg.source.flash?.settle_ms ?? 1500} : null};
+  return cfg;
 }
-function renderFlashLights(selectedEntity) {
-  const choices = [...flashLights];
-  if (selectedEntity && !choices.some(c => c.entity_id === selectedEntity)) choices.push({entity_id:selectedEntity,name:selectedEntity,state:"not checked"});
-  $("flashEntity").replaceChildren(new Option("Select the meter's ESPHome light", ""), ...choices.map(c => new Option(`${c.name} (${c.state})`, c.entity_id)));
-  $("flashEntity").value = selectedEntity || "";
+async function saveConfiguration(notify = true) {
+  if (!current) throw new Error("Add a meter first.");
+  if (jsonDraft) throw new Error("Apply the JSON to the editor before saving, or discard your changes.");
+  const numericFields = ["decimals","threshold","maxRate","interval"];
+  if ($("sourceKind").value === "home_assistant" && $("flashEnabled").checked) numericFields.push("flashBrightness");
+  if ($("sourceKind").value === "upload") numericFields.push("led");
+  for (const id of numericFields) {
+    const field = $(id), value = Number(field.value);
+    if (field.value.trim() === "" || !Number.isFinite(value) || value < Number(field.min) || value > Number(field.max || Infinity)) throw new Error(`Check ${field.closest("label").childNodes[0].textContent.trim().toLowerCase()}.`);
+  }
+  const cfg = editedConfig();
+  if (cfg.source.kind === "home_assistant" && !cfg.source.camera_entity) throw new Error("Choose a camera using Find devices.");
+  if (cfg.source.flash && !cfg.source.flash.light_entity) throw new Error("Select the meter’s ESPHome flash light.");
+  await api(`/api/meters/${selected()}`, {method:"PUT",body:JSON.stringify(cfg)});
+  current.config = cfg; savedConfig = structuredClone(cfg); setDirty(false); renderConfig(); updateHint();
+  if (notify) message("Configuration saved.");
 }
+function showView(name) {
+  for (const key of ["capture","history"]) {
+    const active = key === name;
+    $(`${key}Tab`).setAttribute("aria-selected", String(active)); $(`${key}Tab`).tabIndex = active ? 0 : -1;
+    $(`${key}View`).hidden = !active;
+  }
+  requestAnimationFrame(resizePreview);
+}
+for (const name of ["capture","history"]) {
+  $(`${name}Tab`).onclick = () => showView(name);
+  $(`${name}Tab`).onkeydown = event => { if (["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) { event.preventDefault(); const next = event.key === "Home" ? "capture" : event.key === "End" ? "history" : name === "capture" ? "history" : "capture"; showView(next); $(`${next}Tab`).focus(); } };
+}
+function updateHint() {
+  if (!current) return;
+  const cfg = current.config; let text, action, target;
+  if (cfg.source.kind !== "home_assistant" || !cfg.source.camera_entity) { text = "1. Connect your meter camera, then preview the image."; action = "Choose camera"; target = "camera"; }
+  else if (!cfg.rois.length) { text = "2. Preview the meter, then draw a box around each digit."; action = "Preview camera"; target = "preview"; }
+  else if (current.state.total_m3 === null) { text = "3. Test recognition, then enter the reading verified on the physical meter."; action = "Set baseline"; target = "baseline"; }
+  else { text = cfg.source.enabled ? `Automatic readings every ${cfg.camera.interval_seconds}s${cfg.source.flash ? " · Flash enabled" : ""}.` : "Test the camera reading. Enable automatic readings when calibration is reliable."; action = ""; target = ""; }
+  $("setupHintText").textContent = text; $("setupHintAction").textContent = action; $("setupHintAction").hidden = !action; $("setupHintAction").dataset.target = target;
+}
+$("setupHintAction").onclick = () => {
+  const target = $("setupHintAction").dataset.target;
+  if (target === "baseline") { showView("history"); $("baselinePanel").open = true; $("manualValue").focus(); }
+  else { showView("capture"); if (target === "camera") { $("cameraSettings").open = true; $("sourceKind").focus(); } else $("cameraPreview").click(); }
+};
+function updateRegionCount() { $("roiCount").textContent = `${current?.config.rois.length || 0} regions`; }
+function resizePreview() {
+  if ($("captureView").hidden) return;
+  const zoom = Number($("zoom").value) / 100;
+  const fit = Math.min((stage.clientWidth - 20) / canvas.width, (stage.clientHeight - 20) / canvas.height);
+  if (fit <= 0) return;
+  canvas.style.width = `${Math.floor(canvas.width * fit * zoom)}px`; canvas.style.height = `${Math.floor(canvas.height * fit * zoom)}px`;
+  stage.classList.toggle("zoomed", zoom > 1); $("zoomValue").value = `${Math.round(zoom * 100)}%`;
+}
+new ResizeObserver(resizePreview).observe(stage);
+$("zoom").oninput = resizePreview;
 function drawPreview() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, canvas.width, canvas.height); $("previewEmpty").hidden = Boolean(picture);
   if (picture) ctx.drawImage(picture, 0, 0, canvas.width, canvas.height);
-  if (!current || showingOriginal && current.config.perspective) return;
-  ctx.lineWidth = 2; ctx.font = "16px sans-serif";
-  current.config.rois.forEach((r, i) => { ctx.strokeStyle = "#54eeaf"; ctx.fillStyle = "#153a2b"; ctx.strokeRect(r.x*canvas.width,r.y*canvas.height,r.w*canvas.width,r.h*canvas.height); ctx.fillText(String(i),r.x*canvas.width+3,r.y*canvas.height+18); });
+  if (current && !(showingOriginal && current.config.perspective)) {
+    ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.font = `${Math.max(15, canvas.width / 45)}px sans-serif`;
+    current.config.rois.forEach((roi, index) => { const x=roi.x*canvas.width,y=roi.y*canvas.height;ctx.strokeStyle="#8ff5bc";ctx.strokeRect(x,y,roi.w*canvas.width,roi.h*canvas.height);ctx.fillStyle="#123a2a";ctx.fillRect(x,y,25,23);ctx.fillStyle="#c5ffdd";ctx.fillText(String(index+1),x+5,y+18); });
+    if (startPoint && draftPoint) { ctx.strokeStyle="#ffffff";ctx.setLineDash([5,4]);ctx.strokeRect(startPoint.x*canvas.width,startPoint.y*canvas.height,(draftPoint.x-startPoint.x)*canvas.width,(draftPoint.y-startPoint.y)*canvas.height);ctx.setLineDash([]); }
+  }
+  $("original").classList.toggle("active", showingOriginal); $("overlay").classList.toggle("active", !showingOriginal);
+  updateRegionCount(); resizePreview();
+}
+async function setPicture(blob) {
+  picture?.close(); picture = await createImageBitmap(blob);
+  canvas.width = picture.width; canvas.height = picture.height; $("zoom").value = 100; drawPreview(); updateControls();
 }
 async function loadImage(variant = "overlay") {
-  picture = null; showingOriginal = variant === "original";
+  picture?.close(); picture = null; showingOriginal = variant === "original"; $("processed").hidden = true;
   const row = current?.latest_capture;
-  if (!row?.image_key) { drawPreview(); return; }
-  const path = `/api/meters/${selected()}/images/${row.event_id}/${variant}`;
+  if (!row?.image_key) { $("imageStamp").textContent = "No image yet"; drawPreview(); return; }
   try {
-    const response = await api(path); const blob = await response.blob();
-    if (objectUrls.has("preview")) URL.revokeObjectURL(objectUrls.get("preview"));
-    const url = URL.createObjectURL(blob); objectUrls.set("preview", url);
-    picture = await createImageBitmap(blob); canvas.width = picture.width; canvas.height = picture.height; drawPreview();
-    $("imageStamp").textContent = new Date(row.captured_at).toLocaleString();
-  } catch (error) { drawPreview(); message(`Preview: ${error.message}`); }
+    const response = await api(`/api/meters/${selected()}/images/${row.event_id}/${variant}`);
+    await setPicture(await response.blob()); $("imageStamp").textContent = `Recorded · ${new Date(row.captured_at).toLocaleString()}`;
+  } catch (error) { drawPreview(); message(`Image: ${error.message}`, true); }
   try {
     const response = await api(`/api/meters/${selected()}/images/${row.event_id}/processed`);
-    if (objectUrls.has("processed")) URL.revokeObjectURL(objectUrls.get("processed"));
-    const url = URL.createObjectURL(await response.blob()); objectUrls.set("processed", url);
-    $("processed").src = url; $("processed").hidden = false;
+    const oldUrl = $("processed").dataset.url; if (oldUrl) URL.revokeObjectURL(oldUrl);
+    const url = URL.createObjectURL(await response.blob()); $("processed").dataset.url = url; $("processed").src = url; $("processed").hidden = false;
   } catch { $("processed").hidden = true; }
 }
 function drawGraph(rows) {
-  const c = $("graph"), g = c.getContext("2d"), points = rows.filter(r => r.accepted).reverse();
-  g.clearRect(0,0,c.width,c.height); if (points.length < 2) return;
-  const values = points.map(r => Number(r.value_m3)), times = points.map(r => Date.parse(r.captured_at));
-  const min = Math.min(...values), max = Math.max(...values), span = Math.max(max-min,.001), duration = Math.max(times.at(-1)-times[0],1);
-  g.strokeStyle = "#2f7d61"; g.lineWidth = 3; g.beginPath();
-  points.forEach((p,i) => { const x=55+(times[i]-times[0])/duration*(c.width-85), y=180-(values[i]-min)/span*140; if(i) g.lineTo(x,y); else g.moveTo(x,y); }); g.stroke();
-  g.fillStyle = "#60826e"; g.font = "14px sans-serif"; g.fillText(`${max.toFixed(3)} m³`,10,22); g.fillText(`${min.toFixed(3)} m³`,10,210);
+  const graph = $("graph"), g = graph.getContext("2d"), points = rows.filter(row => row.accepted).slice().reverse();
+  g.clearRect(0,0,graph.width,graph.height); $("graphEmpty").hidden = points.length >= 2;
+  if (points.length < 2) return;
+  const styles = getComputedStyle(document.documentElement), line = styles.getPropertyValue("--line"), muted = styles.getPropertyValue("--muted");
+  const values = points.map(row=>Number(row.value_m3)), times = points.map(row=>Date.parse(row.captured_at));
+  const min=Math.min(...values),max=Math.max(...values),span=Math.max(max-min,.001),duration=Math.max(times.at(-1)-times[0],1);
+  g.font="13px sans-serif";g.lineWidth=1;
+  for(let i=0;i<4;i++){const y=22+i*46;g.strokeStyle=line;g.beginPath();g.moveTo(92,y);g.lineTo(graph.width-18,y);g.stroke();g.fillStyle=muted;g.fillText((max-span*i/3).toFixed(3),8,y+4);}
+  g.strokeStyle=styles.getPropertyValue("--accent");g.lineWidth=3;g.beginPath();
+  points.forEach((row,index)=>{const x=92+(times[index]-times[0])/duration*(graph.width-110),y=22+(max-values[index])/span*138;if(index)g.lineTo(x,y);else g.moveTo(x,y);});g.stroke();
+  g.fillStyle=muted;g.font="12px sans-serif";g.fillText(new Date(times[0]).toLocaleString(),92,190);const end=new Date(times.at(-1)).toLocaleString();g.fillText(end,graph.width-18-g.measureText(end).width,190);
 }
+function renderHistory() {
+  const filter = $("historyFilter").value;
+  const rows = historyRows.filter(row => filter === "all" || (filter === "accepted" ? row.accepted : !row.accepted));
+  $("historyCount").textContent = String(rows.length);
+  $("history").replaceChildren(...rows.map(row => {
+    const tr=document.createElement("tr");
+    [new Date(row.captured_at).toLocaleString(),row.raw_value??"—",row.value_m3??"—",`${(row.confidence*100).toFixed(1)}%`,readable(row.reason),row.source === "Docker" ? "Host OCR" : readable(row.source)].forEach((text,index)=>{const td=document.createElement("td");if(index===4){const badge=document.createElement("span");badge.className=`reading-badge ${row.accepted?"good":"bad"}`;badge.textContent=text;td.append(badge);}else td.textContent=text;tr.append(td);});return tr;
+  }));
+  if (!rows.length) { const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=6;td.className="empty-row";td.textContent=historyRows.length?"No readings match this filter.":"No readings yet. Test OCR, verify the meter and set a baseline.";tr.append(td);$("history").append(tr); }
+  drawGraph(historyRows);
+}
+$("historyFilter").onchange = renderHistory;
 async function renderMeter() {
-  current = meters.find(m => m.config.id === $("meter").value) || null;
-  if (!current) { $("registration").hidden = false; return; }
-  const s = current.state;
-  $("total").textContent = s.total_m3 === null ? "—" : Number(s.total_m3).toLocaleString(undefined,{maximumFractionDigits:6});
-  $("last").textContent = s.last_success ? new Date(s.last_success).toLocaleString() : "Baseline required";
-  $("freshness").textContent = s.stale ? "No recent verified reading" : "Verified reading is fresh";
-  $("confidence").textContent = s.confidence === null ? "—" : `${s.confidence}%`;
-  $("readingStatus").textContent = s.error; $("readingStatus").className = s.error === "ok" ? "small good" : "small bad";
-  $("rssi").textContent = `Wi-Fi ${s.rssi ?? "—"} dBm · camera ${s.camera_online ? "online" : "unavailable"}`;
-  $("captureStatus").textContent = `Camera capture: ${current.capture_status?.status || "not captured"}`;
-  renderConfig(); await loadImage();
-  const rows = await (await api(`/api/meters/${selected()}/history`)).json();
-  $("history").replaceChildren(...rows.map(r => {
-    const tr = document.createElement("tr"); tr.className = r.accepted ? "good" : "bad";
-    [new Date(r.captured_at).toLocaleString(),r.raw_value ?? "—",r.value_m3 ?? "—",`${(r.confidence*100).toFixed(1)}%`,r.reason,r.source].forEach(text => { const td=document.createElement("td"); td.textContent=text; tr.append(td); }); return tr;
-  })); drawGraph(rows);
+  current = meters.find(meter=>meter.config.id === $("meter").value) || null;
+  $("meterWorkspace").hidden = !current;
+  if (!current) { $("registration").hidden=false; return; }
+  $("cameraToken").hidden = $("cameraToken").dataset.meter !== selected();
+  savedConfig = structuredClone(current.config); setDirty(false); $("resultCard").hidden=true; $("testResult").textContent="";
+  const state = current.state;
+  $("total").textContent = state.total_m3 === null ? "—" : Number(state.total_m3).toLocaleString(undefined,{maximumFractionDigits:6});
+  $("last").textContent = state.last_success ? new Date(state.last_success).toLocaleString() : "Set a baseline";
+  $("freshness").textContent = state.total_m3 === null ? "No verified reading yet" : state.stale ? "Last verified value · stale" : "Verified reading is fresh";
+  $("confidence").textContent = state.confidence === null ? "—" : `${state.confidence}%`;
+  $("readingStatus").textContent = state.total_m3 === null ? "Baseline required" : readable(state.error); $("readingStatus").className = `small ${state.total_m3 === null ? "warning" : state.error === "ok" ? "good" : "bad"}`;
+  $("rssi").textContent = state.rssi === null ? (current.config.source.kind === "home_assistant" ? "Home Assistant camera" : "Waiting for an image") : `Wi-Fi ${state.rssi} dBm`;
+  $("captureStatus").textContent = readable(current.capture_status?.status || "not_captured");
+  renderConfig(); updateHint();
+  if (layoutMeterId !== selected()) { const compact = window.matchMedia("(max-width: 760px)").matches; $("cameraSettings").open = !compact || !current.config.source.camera_entity; $("recognitionSettings").open = !compact; layoutMeterId = selected(); }
+  await loadImage(); historyRows = await (await api(`/api/meters/${selected()}/history`)).json(); renderHistory();
 }
 async function refresh() {
+  if (dirty) { message("Save or discard your changes before refreshing.", true); return; }
   const id = $("meter").value;
-  meters = await (await api("/api/meters")).json();
-  $("meter").replaceChildren(...meters.map(m => new Option(m.config.name,m.config.id)));
-  if (meters.some(m => m.config.id === id)) $("meter").value = id;
-  const status = await (await api("/api/status")).json();
-  $("connection").textContent = `MQTT ${status.mqtt} · OCR ${status.ocr_available ? "ready" : "engine unavailable"}`;
+  const [list,status] = await Promise.all([api("/api/meters").then(response=>response.json()),api("/api/status").then(response=>response.json())]);
+  meters=list; $("meter").replaceChildren(...meters.map(meter=>new Option(meter.config.name,meter.config.id)));
+  if (meters.some(meter=>meter.config.id === id)) $("meter").value=id;
+  $("connection").textContent=`OCR ${status.ocr_available?"ready":"unavailable"} · MQTT ${status.mqtt === "disabled"?"off":status.mqtt}`;
+  $("connection").className=`status-chip ${status.ocr_available?"good":"warn"}`;
   await renderMeter();
 }
-$("loginForm").onsubmit = act(async () => { token=$("token").value; await refresh(); $("token").value=""; $("login").hidden=true; $("workspace").hidden=false; message(""); });
-$("logout").onclick = () => { token=""; current=null; meters=[]; $("workspace").hidden=true; $("login").hidden=false; $("history").replaceChildren(); $("cameraToken").textContent=""; $("uploadToken").value=""; $("processed").hidden=true; $("processed").removeAttribute("src"); picture=null; ctx.clearRect(0,0,canvas.width,canvas.height); for(const url of objectUrls.values()) URL.revokeObjectURL(url); objectUrls.clear(); message(""); };
-$("refresh").onclick=act(refresh); $("meter").onchange=act(renderMeter);
-$("add").onclick=()=>{$("registration").hidden=!$("registration").hidden;};
-$("registerForm").onsubmit=act(async()=>{const data=await(await api("/api/meters",{method:"POST",body:JSON.stringify({id:$("newId").value,name:$("newName").value})})).json(); $("cameraToken").textContent=`Camera token (shown once): ${data.camera_token}`; await refresh(); $("meter").value=data.config.id; await renderMeter();});
-$("save").onclick=act(async()=>{if(!current)return; const c=structuredClone(current.config); c.decimal_places=Number($("decimals").value); c.min_confidence=Number($("threshold").value); c.max_rate_lph=Number($("maxRate").value); c.camera.interval_seconds=Number($("interval").value); c.camera.led_duty=Number($("led").value); c.camera.resolution=$("resolution").value; c.source={kind:$("sourceKind").value,camera_entity:$("sourceKind").value==="home_assistant"?$("cameraEntity").value:null,enabled:$("scheduledCapture").checked,flash:$("flashEnabled").checked?{light_entity:$("flashEntity").value,brightness_pct:Number($("flashBrightness").value),settle_ms:c.source.flash?.settle_ms??1500}:null}; await api(`/api/meters/${selected()}`,{method:"PUT",body:JSON.stringify(c)}); await refresh(); message(c.source.flash?"Saved. Preview and readings will briefly flash the selected meter light.":c.source.kind==="home_assistant"?"Saved. Capture interval applies to host polling; camera settings stay in ESPHome.":"Saved. Camera parameters apply on the next configuration poll.");});
-$("loadJson").onclick=act(async()=>{const c=JSON.parse($("config").value); if(c.id!==selected()) throw new Error("Meter ID cannot change"); current.config=c; renderConfig(); drawPreview(); message("Loaded into editor. Save to apply.");});
-$("clearRois").onclick=()=>{if(current){current.config.rois=[];renderConfig();drawPreview();}};
-function point(e){const b=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(e.clientX-b.left)/b.width)),y:Math.max(0,Math.min(1,(e.clientY-b.top)/b.height))};}
-canvas.onpointerdown=e=>{if(!current||!picture)return;if(showingOriginal&&current.config.perspective){message("Select aligned / ROIs before editing perspective-corrected regions.");return;}startPoint=point(e);canvas.setPointerCapture(e.pointerId);};
-canvas.onpointerup=e=>{if(!startPoint||!current)return;const end=point(e),r={x:Math.min(startPoint.x,end.x),y:Math.min(startPoint.y,end.y),w:Math.abs(startPoint.x-end.x),h:Math.abs(startPoint.y-end.y)};startPoint=null;if(r.w>.005&&r.h>.005){current.config.rois.push(r);renderConfig();drawPreview();}};
-$("original").onclick=act(()=>loadImage("original")); $("overlay").onclick=act(()=>loadImage("overlay"));
-async function uploaded(test){if(!selected())throw new Error("Register a meter first");const file=$("upload").files[0];if(!file)throw new Error("Select an image first");const now=encodeURIComponent(new Date().toISOString());const path=test?`/api/meters/${selected()}/test?captured_at=${now}`:`/api/device/${selected()}/images?captured_at=${now}&event_id=${crypto.randomUUID()}`;const result=await(await api(path,{method:"POST",headers:{"Content-Type":file.type},body:file},test?token:$("uploadToken").value)).json();$("testResult").textContent=JSON.stringify(result,null,2);if(!test)await refresh();}
-$("testImage").onclick=act(()=>uploaded(true));$("submitImage").onclick=act(()=>uploaded(false));
-$("manualForm").onsubmit=act(async()=>{await api(`/api/meters/${selected()}/manual`,{method:"POST",body:JSON.stringify({value_m3:$("manualValue").value,kind:$("manualKind").value,reason:$("manualReason").value})});await refresh();message("Manual event recorded. Previous statistics have not been rewritten.");});
-async function download(path,name){const response=await api(path);const url=URL.createObjectURL(await response.blob());const a=document.createElement("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-$("export").onclick=act(()=>download("/api/config/export","waterwatch-config.json"));$("logs").onclick=act(()=>download(`/api/meters/${selected()}/logs`,`${selected()}-log.ndjson`));
-// Refresh only on request: background refresh would discard unsaved ROI edits.
-$("loadCameras").onclick=act(async()=>{const entity=$("cameraEntity").value,light=$("flashEntity").value;[cameras,flashLights]=await Promise.all([api("/api/home-assistant/cameras").then(r=>r.json()),api("/api/home-assistant/flash-lights").then(r=>r.json())]);renderCameras(entity);renderFlashLights(light);message(cameras.length?"Select your meter camera and optional ESPHome flash light, then save.":"No cameras found.");});
-$("cameraPreview").onclick=act(async()=>{if(!selected())throw new Error("Register a meter and save its camera first");const response=await api(`/api/meters/${selected()}/camera-image`,{method:"POST"});picture=await createImageBitmap(await response.blob());showingOriginal=true;canvas.width=picture.width;canvas.height=picture.height;drawPreview();$("imageStamp").textContent="Live preview · not recorded";$("processed").hidden=true;message(current.config.perspective?"Preview is unaligned. Use a recorded capture to edit aligned regions.":"Draw one region per digit, then save before testing OCR.");});
-async function captureCamera(testOnly){if(!selected())throw new Error("Register a meter and save its camera first");const result=await(await api(`/api/meters/${selected()}/capture?test_only=${testOnly}`,{method:"POST"})).json();$("testResult").textContent=JSON.stringify(result,null,2);if(!testOnly)await refresh();message(testOnly?"OCR test complete. Reading history unchanged.":"Capture recorded. Review the result before relying on the reading.");}
+function renderResult(result, testOnly) {
+  const accepted = testOnly ? result.would_accept : result.accepted;
+  $("resultCard").hidden=false; $("resultCard").classList.toggle("rejected", !accepted);
+  $("resultMode").textContent=testOnly?"OCR TEST · NOT RECORDED":"RECORDED CAPTURE";
+  $("resultValue").textContent=result.raw_value ? `${result.raw_value} m³` : "Unreadable";
+  $("resultReason").textContent=readable(result.reason); $("resultReason").className=`result-reason ${accepted?"good":"bad"}`;
+  $("resultConfidence").textContent=`${((result.confidence||0)*100).toFixed(1)}% confidence${testOnly?" · History unchanged":""}`;
+  $("testResult").textContent=JSON.stringify(result,null,2);
+}
+
+$("loginForm").onsubmit=act(async()=>{token=$("token").value;try{await refresh();$("token").value="";$("login").hidden=true;$("workspace").hidden=false;$("logout").hidden=false;requestAnimationFrame(resizePreview);}catch(error){token="";throw error;}});
+$("logout").onclick=()=>{token="";current=null;savedConfig=null;meters=[];historyRows=[];setDirty(false);$("workspace").hidden=true;$("login").hidden=false;$("logout").hidden=true;$("cameraToken").textContent="";$("uploadToken").value="";$("manualValue").value="";$("manualReason").value="";$("newName").value="";$("newId").value="";$("history").replaceChildren();$("testResult").textContent="";$("resultCard").hidden=true;$("processed").hidden=true;$("processed").removeAttribute("src");if($("processed").dataset.url)URL.revokeObjectURL($("processed").dataset.url);picture?.close();picture=null;drawPreview();message("");};
+$("refresh").onclick=act(refresh);
+$("meter").onchange=act(async()=>{if(dirty){$("meter").value=selected();throw new Error("Save or discard changes before switching meters.");}await renderMeter();});
+$("add").onclick=()=>{$("registration").hidden=!$("registration").hidden;if(!$("registration").hidden)$("newName").focus();};
+$("cancelRegistration").onclick=()=>{if(current)$("registration").hidden=true;};
+let customId=false;
+$("newId").oninput=()=>{customId=Boolean($("newId").value);};
+$("newName").oninput=()=>{if(!customId)$("newId").value=$("newName").value.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);};
+$("registerForm").onsubmit=act(async()=>{if(dirty)throw new Error("Save or discard changes before adding a meter.");const data=await(await api("/api/meters",{method:"POST",body:JSON.stringify({id:$("newId").value,name:$("newName").value})})).json();$("cameraToken").textContent=`${data.config.name} upload token (shown once): ${data.camera_token}`;$("cameraToken").dataset.meter=data.config.id;await refresh();$("meter").value=data.config.id;await renderMeter();$("registration").hidden=true;showView("capture");message("Meter created. Select Home Assistant camera, then find your devices.");});
+$("save").onclick=act(()=>saveConfiguration());
+$("discard").onclick=()=>{if(!current||!savedConfig)return;current.config=structuredClone(savedConfig);renderConfig();setDirty(false);drawPreview();updateHint();message("Unsaved changes discarded.");};
+for(const element of document.querySelectorAll(".settings-column input, .settings-column select")){element.addEventListener("input",()=>{sourceControls();setDirty();});}
+$("config").oninput=()=>{jsonDraft=true;setDirty();};
+$("loadJson").onclick=()=>{try{const cfg=JSON.parse($("config").value);if(cfg.id!==selected())throw new Error("Meter ID cannot change.");if(!cfg.camera||!cfg.source||!Array.isArray(cfg.rois))throw new Error("Configuration must include camera, source and digit regions.");current.config=cfg;renderConfig();setDirty();drawPreview();message("JSON loaded into the editor. Save to apply.");}catch(error){message(error.message,true);}};
+function point(event){const box=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(event.clientX-box.left)/box.width)),y:Math.max(0,Math.min(1,(event.clientY-box.top)/box.height))};}
+canvas.onpointerdown=event=>{if(!current||!picture||busy)return;if(showingOriginal&&current.config.perspective){message("Use the aligned image to edit perspective-corrected digit regions.",true);return;}startPoint=point(event);draftPoint=startPoint;canvas.setPointerCapture(event.pointerId);};
+canvas.onpointermove=event=>{if(startPoint){draftPoint=point(event);drawPreview();}};
+canvas.onpointerup=event=>{if(!startPoint||!current)return;const end=point(event),roi={x:Math.min(startPoint.x,end.x),y:Math.min(startPoint.y,end.y),w:Math.abs(startPoint.x-end.x),h:Math.abs(startPoint.y-end.y)};startPoint=null;draftPoint=null;if(roi.w>.005&&roi.h>.005){if(current.config.rois.length>=12)message("Up to 12 digit regions are supported.",true);else{current.config.rois.push(roi);$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();}}drawPreview();};
+canvas.onpointercancel=()=>{startPoint=null;draftPoint=null;drawPreview();};
+$("undoRoi").onclick=()=>{if(current){current.config.rois.pop();$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();drawPreview();}};
+$("clearRois").onclick=()=>{if(current){current.config.rois=[];$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();drawPreview();}};
+$("original").onclick=act(()=>loadImage("original"));$("overlay").onclick=act(()=>loadImage("overlay"));
+$("loadCameras").onclick=act(async()=>{const camera=$("cameraEntity").value,light=$("flashEntity").value;[cameras,flashLights]=await Promise.all([api("/api/home-assistant/cameras").then(response=>response.json()),api("/api/home-assistant/flash-lights").then(response=>response.json())]);renderChoices("cameraEntity",cameras,camera,"Select a camera");renderChoices("flashEntity",flashLights,light,"Select the meter’s ESPHome light");message(cameras.length?"Devices loaded. Select your meter camera and optional flash light.":"No cameras found in Home Assistant.");});
+$("cameraPreview").onclick=act(async()=>{if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const response=await api(`/api/meters/${selected()}/camera-image`,{method:"POST"});showingOriginal=true;await setPicture(await response.blob());$("imageStamp").textContent="Live preview · Not recorded";$("processed").hidden=true;message(current.config.perspective?"Preview uses the original image. Record a capture to edit aligned regions.":"Draw a box around each digit, then save and test OCR.");});
+async function captureCamera(testOnly){if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const result=await(await api(`/api/meters/${selected()}/capture?test_only=${testOnly}`,{method:"POST"})).json();if(!testOnly)await refresh();renderResult(result,testOnly);$("captureStatus").textContent=testOnly?"Test complete · Not recorded":"Capture recorded";message(testOnly?"Test complete. The last preview remains displayed; reading history is unchanged.":"Capture recorded. Review its result in History.");}
 $("cameraTest").onclick=act(()=>captureCamera(true));
-$("cameraCapture").onclick=act(()=>captureCamera(false));
-async function boot(){try{const session=await(await api("/api/session")).json();ingress=session.authentication==="ingress";if(ingress){await refresh();$("login").hidden=true;$("workspace").hidden=false;$("logout").hidden=true;}}catch(error){message(error.message);}}
+$("cameraCapture").onclick=act(async()=>{if(dirty)throw new Error("Save configuration before recording a reading.");await captureCamera(false);});
+async function uploaded(testOnly){if(!selected())throw new Error("Add a meter first.");if(dirty)throw new Error("Save configuration before testing or recording an upload.");const file=$("upload").files[0];if(!file)throw new Error("Select a JPEG or PNG first.");const now=encodeURIComponent(new Date().toISOString());const path=testOnly?`/api/meters/${selected()}/test?captured_at=${now}`:`/api/device/${selected()}/images?captured_at=${now}&event_id=${crypto.randomUUID()}`;const result=await(await api(path,{method:"POST",headers:{"Content-Type":file.type},body:file},testOnly?token:$("uploadToken").value)).json();if(!testOnly)await refresh();renderResult(result,testOnly);if(testOnly){showingOriginal=true;await setPicture(file);$("imageStamp").textContent="Uploaded test · Not recorded";}}
+$("testImage").onclick=act(()=>uploaded(true));$("submitImage").onclick=act(()=>uploaded(false));
+$("manualForm").onsubmit=act(async()=>{if(dirty)throw new Error("Save or discard configuration changes before recording a baseline.");await api(`/api/meters/${selected()}/manual`,{method:"POST",body:JSON.stringify({value_m3:$("manualValue").value,kind:$("manualKind").value,reason:$("manualReason").value})});await refresh();$("manualReason").value="";message("Verified baseline recorded. Previous history is preserved.");});
+async function download(path,name){const response=await api(path);const url=URL.createObjectURL(await response.blob());const anchor=document.createElement("a");anchor.href=url;anchor.download=name;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+$("export").onclick=act(()=>download("/api/config/export","waterwatch-config.json"));$("logs").onclick=act(()=>download(`/api/meters/${selected()}/logs`,`${selected()}-log.ndjson`));
+window.addEventListener("beforeunload",event=>{if(dirty){event.preventDefault();event.returnValue="";}});
+async function boot(){try{const session=await(await api("/api/session")).json();ingress=session.authentication==="ingress";if(ingress){busy=true;updateControls();await refresh();$("login").hidden=true;$("workspace").hidden=false;$("logout").hidden=true;requestAnimationFrame(resizePreview);}}catch(error){message(error.message,true);}finally{busy=false;updateControls();}}
 boot();
