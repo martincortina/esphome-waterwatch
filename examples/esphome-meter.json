@@ -1,0 +1,13 @@
+{
+  "id": "house-water",
+  "name": "House water",
+  "mode": "Docker",
+  "decimal_places": 3,
+  "rois": [],
+  "camera": {"interval_seconds": 300},
+  "source": {
+    "kind": "home_assistant",
+    "camera_entity": "camera.waterwatch_camera_meter_camera",
+    "enabled": false
+  }
+}

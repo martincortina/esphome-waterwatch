@@ -49,7 +49,7 @@ docker build -t waterwatch-esphome:dev ./waterwatch_esphome
 ```
 
 Tests use synthetic fixtures; native Tesseract and a live MQTT broker are separate
-checks. GitHub Actions runs Python checks and builds both supported container platforms.
+checks. Run the commands above to validate changes locally.
 
 Application code is MIT licensed. No upstream recognition models or meter photos
 are bundled. See [third-party notices](THIRD_PARTY_NOTICES.md).
