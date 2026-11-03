@@ -95,3 +95,35 @@ test('rotated handles and external rotation knob are hit before a box body',()=>
   assert.deepEqual(geometry.hitTest([oriented],knob,{x:.01,y:.01},0,imageSize,knob),{index:0,handle:'rotate'});
   close(geometry.angleAt(oriented,knob,imageSize),0);
 });
+test('moving a group clamps all regions together without changing spacing',()=>{
+  const list=[{x:.1,y:.2,w:.1,h:.2},{x:.4,y:.2,w:.1,h:.2,rotation_degrees:20}];
+  const moved=geometry.moveGroup(list,9,-8,imageSize);
+  close(moved[1].x-moved[0].x,.3);close(moved[1].y-moved[0].y,0);
+  assert.equal(moved.every(box=>geometry.inside(box,imageSize)),true);
+});
+test('group rotation preserves pair distances, sizes and relative angles',()=>{
+  const list=[{x:.35,y:.4,w:.06,h:.1,rotation_degrees:5},{x:.55,y:.4,w:.06,h:.1,rotation_degrees:-5}];
+  const turned=geometry.rotateGroup(list,30,imageSize);
+  assert.ok(turned);close(turned[0].w,list[0].w);close(turned[0].h,list[0].h);
+  close(turned[0].rotation_degrees,35);close(turned[1].rotation_degrees,25);
+  const distance=boxes=>Math.hypot((boxes[1].x-boxes[0].x)*320,(boxes[1].y-boxes[0].y)*240);
+  close(distance(list),distance(turned));
+});
+test('unsafe group rotation is rejected instead of moving individual boxes',()=>{
+  assert.equal(geometry.rotateGroup([{x:.05,y:.05,w:.1,h:.9},{x:.8,y:.05,w:.1,h:.9}],90,imageSize),null);
+});
+test('photo quarter turns preserve digit geometry through a complete turn',()=>{
+  const list=[{x:.2,y:.3,w:.1,h:.2,rotation_degrees:-17}];
+  let current=list;
+  for(const [a,b] of [[0,90],[90,-180],[-180,-90],[-90,0]])current=geometry.reorient(current,imageSize,a,b);
+  for(const key of ['x','y','w','h','rotation_degrees'])close(current[0][key],list[0][key]);
+});
+test('fine photo rotation preserves physical box size and carries its angle',()=>{
+  const list=[{x:.4,y:.4,w:.1,h:.1,rotation_degrees:7}];
+  const result=geometry.reorient(list,imageSize,0,13.5),out=geometry.rotatedSize(imageSize,13.5);
+  close(result[0].w*out.width,32);close(result[0].h*out.height,24);
+  close(result[0].rotation_degrees,20.5);
+});
+test('photo rotation never silently shifts a box whose base rectangle would leave bounds',()=>{
+  assert.equal(geometry.reorient([{x:.1,y:0,w:.05,h:.4}],imageSize,0,90),null);
+});

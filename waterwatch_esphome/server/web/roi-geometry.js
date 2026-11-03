@@ -68,6 +68,41 @@ var RoiGeometry = (() => {
   function rotate(roi, degrees, size) { return fit({...roi,rotation_degrees:Math.round((((degrees+180)%360+360)%360-180)*10)/10},size); }
   function rotationHandle(roi,offset,size) { return localPoint(roi,{x:roi.x+roi.w/2,y:roi.y-offset/size.height},size); }
   function angleAt(roi,p,size) { return Math.atan2((p.y-roi.y-roi.h/2)*size.height,(p.x-roi.x-roi.w/2)*size.width)*180/Math.PI; }
-  return {handles,corners,localPoint,contains,hitTest,move,resize,fromPoints,rotate,rotationHandle,angleAt,inside};
+  function moveGroup(rois,dx,dy,size) {
+    const bounds=rois.flatMap(roi=>[...corners(roi,size),{x:roi.x,y:roi.y},{x:roi.x+roi.w,y:roi.y+roi.h}]);
+    if(!bounds.length)return [];
+    dx=clamp(dx,-Math.min(...bounds.map(p=>p.x)),1-Math.max(...bounds.map(p=>p.x)));
+    dy=clamp(dy,-Math.min(...bounds.map(p=>p.y)),1-Math.max(...bounds.map(p=>p.y)));
+    return rois.map(roi=>({...roi,x:Math.max(0,roi.x+dx),y:Math.max(0,roi.y+dy)}));
+  }
+  function rotateGroup(rois,degrees,size) {
+    if(!rois.length)return [];
+    const points=rois.flatMap(roi=>corners(roi,size));
+    const cx=(Math.min(...points.map(p=>p.x))+Math.max(...points.map(p=>p.x)))/2;
+    const cy=(Math.min(...points.map(p=>p.y))+Math.max(...points.map(p=>p.y)))/2;
+    const pivot={x:cx,y:cy,w:0,h:0,rotation_degrees:degrees};
+    const output=rois.map(roi=>{const center=localPoint(pivot,{x:roi.x+roi.w/2,y:roi.y+roi.h/2},size);return {...roi,x:center.x-roi.w/2,y:center.y-roi.h/2,rotation_degrees:(((roi.rotation_degrees||0)+degrees+180)%360+360)%360-180};});
+    return output.every(roi=>inside(roi,size))?output:null;
+  }
+  function rotatedSize(size,degrees) {
+    if(Math.abs(degrees)%180===90)return {width:size.height,height:size.width};
+    if(degrees%180===0)return {...size};
+    const radians=degrees*Math.PI/180,c=Math.abs(Math.cos(radians)),s=Math.abs(Math.sin(radians));
+    return {width:Math.ceil(size.width*c+size.height*s),height:Math.ceil(size.height*c+size.width*s)};
+  }
+  function reorient(rois,base,oldAngle,newAngle) {
+    const before=rotatedSize(base,oldAngle),after=rotatedSize(base,newAngle);
+    const pivot={x:.5,y:.5,w:0,h:0,rotation_degrees:newAngle-oldAngle};
+    let representable=true;
+    const output=rois.map(roi=>{
+      const p=localPoint(pivot,{x:roi.x+roi.w/2,y:roi.y+roi.h/2},before);
+      const cx=((p.x-.5)*before.width+after.width/2)/after.width,cy=((p.y-.5)*before.height+after.height/2)/after.height;
+      const w=roi.w*before.width/after.width,h=roi.h*before.height/after.height;
+      if(cx-w/2 < -1e-12 || cy-h/2 < -1e-12)representable=false;
+      return {...roi,x:Math.max(0,cx-w/2),y:Math.max(0,cy-h/2),w,h,rotation_degrees:(((roi.rotation_degrees||0)+newAngle-oldAngle+180)%360+360)%360-180};
+    });
+    return representable && output.every(roi=>inside(roi,after))?output:null;
+  }
+  return {handles,corners,localPoint,contains,hitTest,move,resize,fromPoints,rotate,rotationHandle,angleAt,inside,moveGroup,rotateGroup,rotatedSize,reorient};
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = RoiGeometry;

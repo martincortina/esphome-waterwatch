@@ -86,7 +86,11 @@ The local-ZIP method below is an alternative for manual installations.
   straightening slider** for a precise angle from -180° to 180° (positive is
   clockwise). Rotate until the digits are horizontal, then draw their regions and
   save. The angle is stored per meter and applies to both preview and host OCR.
-  Changing it clears the previous regions; Discard restores the saved calibration.
+  Existing digit boxes are transformed with the photo. If a box cannot fit, the
+  orientation change is refused; adjust/clear that layout first. Photo rotation
+  resets alignment landmarks and the reference; Discard restores saved calibration.
+  With alignment enabled, this rotates the saved calibration reference rather than
+  changing its coordinates to an unregistered live frame.
   Original shows the unchanged source image. Rotation never triggers another flash.
 - To refine existing regions, use **Edit digits**: click a box, drag inside to move
   it, or drag one of its eight handles to resize. The selected box is yellow.
@@ -114,12 +118,21 @@ The local-ZIP method below is an alternative for manual installations.
   save or discard it. Edited JSON must first be applied to the editor.
 - **History** contains the counter graph, reading filters, exported logs, and manual
   baseline/correction events. An OCR test leaves the reading history unchanged.
-- A camera OCR test uses a new capture; the last displayed preview stays in place.
-  Test results are labelled **Not recorded**. Record reading explicitly stores a
-  capture and its result. MQTT publication still depends on the add-on option.
+- A camera OCR test displays the exact photograph used, with upright digit crops,
+  each pass's result/score, agreement counts and brightness/highlight measurements.
+  Quality warnings are advisory; original sharpness/brightness rejection gates remain.
+  Tests are labelled **Not recorded** and do not write the reading ledger or MQTT
+  outbox. **Record reading** explicitly stores a capture and result.
+- **Move / rotate all** applies a common shift/rotation to all boxes without changing
+  their order or spacing. Uncheck it to resize a single region. **Precise digit
+  position & size** provides percentage coordinates and a Duplicate digit action.
+- **Collect a test example** downloads a JSON bundle containing the exact photo,
+  aligned image, crops, calibration, scores and an optional human-verified label.
+  Keep these files private. No upload, automatic training or reading correction is
+  performed by this export. Tests otherwise remain only in browser memory.
 
 Perspective points remain in the original source-image coordinates. Processing order
-is source image → perspective correction (if configured) → rotation → digit regions.
+is source image → perspective correction (if configured) → rotation → optional landmark alignment → digit regions.
 Each region may have its own `rotation_degrees` in [-180, 180], defaulting to 0
 for older configurations. Its x/y/w/h describe the unrotated rectangle; it rotates
 about its centre in aligned-image pixel coordinates. OCR maps the oriented region
@@ -130,12 +143,42 @@ fine-angle rotation expands the canvas with white borders so the image is not cr
 Old configurations default to 0°. Stored source images and historic readings remain
 unchanged. Arbitrary-angle output is limited to 10 megapixels to bound memory use.
 
+## Automatic alignment
+
+1. Pause alignment and save first if it was enabled. Preview a clear photo with the
+   intended orientation and calibrated digit boxes. Use diffuse light and fixed optics.
+2. Open **Automatic alignment** and choose **Save displayed photo as reference**.
+   This saves a private calibration photo in the add-on data, not a water reading.
+3. Mark two distinctive, stationary landmarks far apart and clear of frame edges.
+   Logos/case markings are preferable to moving digits, pointers, glare or plain areas.
+   The image scrolls into view; Escape cancels landmark drawing.
+4. Enable **Align each photo automatically**, save and test. Check both match scores
+   and all digit crops. The default search margin is 12%, score threshold 0.85 and
+   maximum rotation 8°. These are rejection limits, not a guarantee every movement
+   inside them will match. Similar alternative matches and scale changes over 2.5%
+   also stop recognition. A digit mapped outside the source photo is rejected.
+5. Large movement, changed focus/resolution, reference orientation or perspective
+   requires a new reference and landmarks. A rejected alignment shows the original
+   test photograph, disables region editing on that original, and preserves history.
+
+On reopening the workshop, a saved reference is labelled **Not a live photo**.
+Preview or Test OCR retrieves a new camera image. References survive restarts and
+are meter-specific. The last five references plus any older active reference are
+retained. HA add-on backups contain them; configuration JSON alone does not contain
+reference photographs. Alignment is disabled by default on existing meters.
+
+The recognition engine is still Tesseract. Meter-trained models, rolling-wheel/carry
+interpretation, analog pointers, an in-app labelled training gallery and measured
+real-meter model validation are subsequent work. Exported test bundles prepare data
+for that work without claiming that a neural recognizer is installed.
+
 ## Recognition boundaries
 
 This is a host-side OpenCV/Tesseract baseline, not the reference project's trained
 neural recognizer. It supports a fixed digital wheel layout with per-digit boxes and
 optional static perspective correction. It has no trained analog-pointer reader,
-automatic movement alignment or reliable half-rolled wheel interpretation. Tesseract
+reliable half-rolled wheel interpretation. Optional landmark alignment only compensates
+small rigid camera movements; it does not guarantee recognition accuracy. Tesseract
 scores and two-pass agreement do not establish real meter accuracy.
 
 Unreadable, low-score, implausible, delayed and out-of-order candidates do not replace

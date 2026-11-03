@@ -201,7 +201,7 @@ class CameraCollector:
             return self.camera.snapshot(cfg.source.camera_entity, flash=cfg.source.flash)
         return self.camera.snapshot(cfg.source.camera_entity)
 
-    def capture(self, meter_id, test_only=True):
+    def capture(self, meter_id, test_only=True, include_images=False):
         with self.lock:
             cfg = self.service.store.config(meter_id)
             if cfg.source.kind != "home_assistant":
@@ -229,6 +229,7 @@ class CameraCollector:
                     result = self.service.process(
                         meter_id, f"ha-{uuid.uuid4().hex}", captured_at, data,
                         test_only=test_only,
+                        include_images=include_images,
                         capture_metadata={
                             "camera_entity": cfg.source.camera_entity,
                             "image_sha256": digest,

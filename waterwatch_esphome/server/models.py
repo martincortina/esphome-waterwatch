@@ -83,6 +83,29 @@ class ImageSource(StrictModel):
         return self
 
 
+class AlignmentConfig(StrictModel):
+    enabled: bool = False
+    reference_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    anchors: list[ROI] = Field(default_factory=list, max_length=2)
+    search_margin: float = Field(default=.12, ge=.01, le=.25)
+    max_angle_degrees: float = Field(default=8, ge=.1, le=15)
+    min_score: float = Field(default=.85, ge=.5, le=1)
+    min_peak_margin: float = Field(default=.04, ge=0, le=.5)
+
+    @model_validator(mode="after")
+    def valid_anchors(self):
+        if any(roi.rotation_degrees or roi.w * roi.h > .1 for roi in self.anchors):
+            raise ValueError("Landmarks must be unrotated and cover at most 10% of the image")
+        if self.enabled and (not self.reference_id or len(self.anchors) != 2):
+            raise ValueError("Automatic alignment needs a saved reference and two landmarks")
+        if len(self.anchors) == 2:
+            a, b = self.anchors
+            distance = ((a.x+a.w/2-b.x-b.w/2)**2 + (a.y+a.h/2-b.y-b.h/2)**2)**.5
+            if distance < .15:
+                raise ValueError("Choose landmarks farther apart")
+        return self
+
+
 class MeterConfig(StrictModel):
     id: Identifier
     name: str = Field(min_length=1, max_length=80)
@@ -103,6 +126,7 @@ class MeterConfig(StrictModel):
     perspective: list[tuple[float, float]] | None = None
     # Clockwise, after perspective correction; ROIs refer to this final image.
     rotation_degrees: float = Field(default=0, ge=-180, le=180)
+    alignment: AlignmentConfig = Field(default_factory=AlignmentConfig)
     aligned_width: int = Field(default=800, ge=100, le=1600)
     aligned_height: int = Field(default=600, ge=100, le=1200)
     camera: CameraConfig = Field(default_factory=CameraConfig)

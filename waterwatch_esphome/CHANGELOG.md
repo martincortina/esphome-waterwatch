@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0
+
+- Optional reference-image alignment using two fixed landmarks, with confidence,
+  ambiguity, movement, scale and clipped-digit checks before recognition.
+- OCR tests display their exact source photograph, oriented crops, per-pass scores
+  and advisory quality measurements, while preserving reading history and MQTT state.
+- Download labelled test bundles locally for later review/model validation.
+- Move/rotate all digit boxes together; precise percentage coordinates and duplication.
+- Whole-photo rotation reprojects existing digit boxes instead of clearing them.
+- Calibration references survive restarts and are private to their meter.
+
 ## 0.6.0
 
 - Rotate each digit box independently with a round handle, angle field or quarter turns.

@@ -20,7 +20,7 @@ from server.config import Settings
 from server.home_assistant import CameraCollector, CameraError, HomeAssistantCamera
 from server.models import ManualReading, MeterConfig
 from server.mqtt import MqttBridge
-from server.ocr import align, decode, jpeg
+from server.ocr import jpeg
 from server.service import Service, public_reading, token_hash
 
 bearer = HTTPBearer(auto_error=False)
@@ -80,7 +80,7 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
 
     app = FastAPI(
         title="WaterWatch",
-        version="0.6.0",
+        version="0.7.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -214,29 +214,50 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
         return Response(data, media_type=media)
 
     @app.post("/api/meters/{meter_id}/capture", dependencies=[Depends(admin)])
-    def capture(meter_id: str, test_only: bool = True):
+    def capture(meter_id: str, test_only: bool = True, include_images: bool = False):
         config(meter_id)
-        return collector.capture(meter_id, test_only=test_only)
+        return collector.capture(meter_id, test_only=test_only, include_images=include_images)
 
     @app.post("/api/meters/{meter_id}/transform-image", dependencies=[Depends(admin)])
     async def transform_image(
         meter_id: str, request: Request,
         rotation_degrees: float | None = Query(default=None, ge=-180, le=180),
+        use_alignment: bool = True,
     ):
         cfg = config(meter_id)
         if rotation_degrees is not None:
             cfg = cfg.model_copy(update={"rotation_degrees": rotation_degrees})
+        if not use_alignment:
+            cfg = cfg.model_copy(update={"alignment": cfg.alignment.model_copy(update={"enabled": False})})
         data = await image_body(request)
 
         def render_transform():
             with service.processing:
-                return jpeg(align(decode(data), cfg))
+                return jpeg(service.transform(data, cfg))
 
         try:
             result = await run_in_threadpool(render_transform)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
         return Response(result, media_type="image/jpeg")
+
+    @app.post("/api/meters/{meter_id}/alignment/reference", dependencies=[Depends(admin)])
+    async def alignment_reference(meter_id: str, request: Request):
+        config(meter_id)
+        data = await image_body(request)
+        try:
+            return await run_in_threadpool(service.save_reference, meter_id, data)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @app.get("/api/meters/{meter_id}/alignment/reference", dependencies=[Depends(admin)])
+    def reference_image(meter_id: str):
+        cfg = config(meter_id)
+        path = service.references / f"{cfg.id}-{cfg.alignment.reference_id}.source"
+        if not cfg.alignment.reference_id or not path.exists():
+            raise HTTPException(404, "Reference image not found")
+        media = "image/png" if path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+        return FileResponse(path, media_type=media)
 
     @app.post("/api/meters", status_code=201, dependencies=[Depends(admin)])
     def register(cfg: MeterConfig):
@@ -346,6 +367,8 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
                 for cfg in configs:
                     if cfg.mode != "Docker":
                         raise ValueError("Local OCR is not installed")
+                    if cfg.alignment.enabled:
+                        service.validate_alignment(cfg)
                     if (
                         db.execute(
                             "UPDATE meters SET config=? WHERE id=?", (cfg.model_dump_json(), cfg.id)

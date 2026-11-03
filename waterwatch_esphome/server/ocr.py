@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from server.alignment import AlignmentError, register
 from server.models import ROI, MeterConfig
 
 
@@ -20,6 +21,8 @@ class Recognition:
     details: dict = field(default_factory=dict)
     overlay: bytes | None = None
     processed: bytes | None = None
+    aligned: bytes | None = None
+    crops: list[bytes] = field(default_factory=list)
 
 
 def jpeg(image) -> bytes:
@@ -66,22 +69,21 @@ def rotate(image, degrees):
                           flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255))
 
 
-def align(image, cfg: MeterConfig):
+def align(image, cfg: MeterConfig, reference=None, diagnostics=None, use_registration=True):
     if cfg.perspective is None:
-        return rotate(image, cfg.rotation_degrees)
-    height, width = image.shape[:2]
-    src = np.float32(cfg.perspective) * (width - 1, height - 1)
-    dst = np.float32(
-        [
-            [0, 0],
-            [cfg.aligned_width - 1, 0],
-            [cfg.aligned_width - 1, cfg.aligned_height - 1],
-            [0, cfg.aligned_height - 1],
-        ]
-    )
-    matrix = cv2.getPerspectiveTransform(src.astype(np.float32), dst)
-    corrected = cv2.warpPerspective(image, matrix, (cfg.aligned_width, cfg.aligned_height))
-    return rotate(corrected, cfg.rotation_degrees)
+        corrected = rotate(image, cfg.rotation_degrees)
+    else:
+        height, width = image.shape[:2]
+        src = np.float32(cfg.perspective) * (width - 1, height - 1)
+        dst = np.float32([[0, 0], [cfg.aligned_width-1, 0],
+                         [cfg.aligned_width-1, cfg.aligned_height-1], [0, cfg.aligned_height-1]])
+        matrix = cv2.getPerspectiveTransform(src.astype(np.float32), dst)
+        corrected = rotate(cv2.warpPerspective(image, matrix, (cfg.aligned_width, cfg.aligned_height)), cfg.rotation_degrees)
+    if cfg.alignment.enabled and use_registration:
+        corrected, result = register(corrected, reference, cfg)
+        if diagnostics is not None:
+            diagnostics["alignment"] = result
+    return corrected
 
 
 def digit_corners(roi: ROI, width: int, height: int):
@@ -163,26 +165,42 @@ class TesseractEngine:
 
 
 class Pipeline:
-    def __init__(self, engine=None):
+    def __init__(self, engine=None, reference_loader=None):
         self.engine = engine or TesseractEngine()
+        self.reference_loader = reference_loader
 
     def run(self, data: bytes, cfg: MeterConfig) -> Recognition:
-        image = align(decode(data), cfg)
+        context = {}
+        try:
+            reference = self.reference_loader(cfg) if cfg.alignment.enabled and self.reference_loader else None
+            image = align(decode(data), cfg, reference=reference, diagnostics=context)
+        except AlignmentError as error:
+            return Recognition(reason=str(error), details={"alignment": error.details})
+        aligned = jpeg(image)
         overlay = image.copy()
         height, width = image.shape[:2]
         if not cfg.rois:
-            return Recognition(reason="roi_not_configured", overlay=jpeg(image))
-        digits, confidences, diagnostics, previews = [], [], [], []
+            return Recognition(reason="roi_not_configured", overlay=aligned, aligned=aligned, details=context)
+        digits, confidences, diagnostics, previews, crops = [], [], [], [], []
+        poor_quality = False
         for index, roi in enumerate(cfg.rois):
             corners = digit_corners(roi, width, height)
             try:
-                patch = cv2.cvtColor(crop_digit(image, roi), cv2.COLOR_BGR2GRAY)
+                color = crop_digit(image, roi)
+                crops.append(jpeg(color))
+                patch = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
             except ValueError as error:
-                return Recognition(reason=str(error), details={"digit": index}, overlay=jpeg(overlay))
+                return Recognition(reason=str(error), details={**context, "digit": index}, overlay=jpeg(overlay), aligned=aligned, crops=crops)
             sharpness = float(cv2.Laplacian(patch, cv2.CV_64F).var())
             brightness = float(patch.mean())
             diagnostics.append({"digit": index, "sharpness": sharpness, "brightness": brightness,
-                                "rotation_degrees": roi.rotation_degrees})
+                                "rotation_degrees": roi.rotation_degrees,
+                                "contrast": round(float(np.percentile(patch, 95)-np.percentile(patch, 5)), 2),
+                                "highlight_fraction": round(float(np.mean(patch >= 245)), 4),
+                                "shadow_fraction": round(float(np.mean(patch <= 10)), 4),
+                                "quality_warnings": (["dark_digit"] if brightness < 35 else []) +
+                                (["soft_or_blurred"] if sharpness < cfg.min_sharpness else []) +
+                                (["check_highlights"] if np.mean(patch >= 245) > .2 else [])})
             cv2.polylines(overlay, [np.rint(corners).astype(np.int32)], True, (80, 210, 80), 2)
             x, y = np.rint(corners[0]).astype(int)
             cv2.putText(
@@ -198,11 +216,12 @@ class Pipeline:
                 sharpness < cfg.min_sharpness
                 or not cfg.min_brightness <= brightness <= cfg.max_brightness
             ):
-                return Recognition(
-                    reason="poor_image_quality",
-                    details={"digits": diagnostics},
-                    overlay=jpeg(overlay),
-                )
+                diagnostics[-1]["status"] = "poor_image_quality"
+                digits.append("?")
+                confidences.append(0)
+                poor_quality = True
+                previews.append(cv2.resize(patch, (110, 150)))
+                continue
             enlarged = cv2.resize(patch, (80, 120), interpolation=cv2.INTER_CUBIC)
             enhanced = cv2.createCLAHE(clipLimit=2, tileGridSize=(4, 4)).apply(enlarged)
             threshold = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
@@ -214,8 +233,11 @@ class Pipeline:
             try:
                 results = [self.engine.digit(p) for p in variants]
             except (OSError, subprocess.SubprocessError):
-                return Recognition(reason="ocr_engine_failure", overlay=jpeg(overlay))
+                return Recognition(reason="ocr_engine_failure", details={**context, "digits": diagnostics},
+                                   overlay=jpeg(overlay), aligned=aligned, crops=crops)
             diagnostics[-1]["recognitions"] = results
+            agreed = results[0][0] is not None and results[0][0] == results[1][0]
+            diagnostics[-1]["status"] = ("agreed" if min(r[1] for r in results) >= cfg.min_confidence else "low_confidence") if agreed else "ambiguous"
             # Require agreement between two preprocessing passes. Never guess a missing digit.
             if results[0][0] is None or results[0][0] != results[1][0]:
                 digits.append("?")
@@ -230,9 +252,10 @@ class Pipeline:
         return Recognition(
             raw_value=text,
             confidence=min(confidences),
-            reason="candidate" if readable else "ambiguous_digit",
-            details={"digits": diagnostics, "engine": type(self.engine).__name__,
+            reason="poor_image_quality" if poor_quality else "candidate" if readable else "ambiguous_digit",
+            details={**context, "digits": diagnostics, "engine": type(self.engine).__name__,
                      "rotation_degrees": cfg.rotation_degrees},
             overlay=jpeg(overlay),
             processed=jpeg(np.hstack(previews)),
+            aligned=aligned, crops=crops,
         )

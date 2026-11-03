@@ -5,7 +5,7 @@ run OpenCV/Tesseract recognition locally on the **Home Assistant host**.
 
 [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fmartincortina%2Fesphome-waterwatch)
 
-![Individual digit rotation with synthetic demonstration data](docs/webui-digit-rotation-0.6.0.jpg)
+![Alignment and digit diagnostics with synthetic demonstration data](docs/webui-workshop-0.7.0.jpg)
 
 *Interface preview uses synthetic meter data and a test recognizer; it is not a
 measurement of real-meter OCR accuracy.*
@@ -39,12 +39,16 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
   Undo/redo, individual deletion and keyboard adjustments help refine calibration.
 - Rotate individual digit boxes with an angle field or round handle. OCR rectifies
   each oriented crop independently of the photograph's overall rotation.
+- Two fixed landmarks optionally align each capture to a saved reference before OCR.
+  Uncertain matches stop processing; large camera movement requires recalibration.
+- Exact test images, per-digit results/quality measurements, group edits, precise
+  coordinates and local diagnostic-bundle exports support calibration and validation.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 
 **Experimental:** this uses host-side Tesseract, not AI-on-the-edge-device's neural
-model. It has no trained analog-pointer or wheel-transition recognizer and no
-automatic movement alignment. Confidence scores do not establish real meter accuracy.
+model. It has no trained analog-pointer or wheel-transition recognizer. Landmark
+alignment and confidence scores do not establish real meter accuracy.
 Test and calibrate your actual meter before enabling publication.
 
 HA access is GET-only by default. Selecting a flash light permits only that entity's
@@ -56,7 +60,7 @@ or privileged device access are requested. Supervisor credentials remain in memo
 ```sh
 python -m pip install -r requirements-dev.lock
 python -m pytest -q
-node --test tests/roi_geometry.test.cjs
+node --test tests/roi_geometry.test.cjs tests/test_bundle.test.cjs
 python -m ruff check waterwatch_esphome/server tests
 docker build -t waterwatch-esphome:dev ./waterwatch_esphome
 ```
