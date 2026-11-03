@@ -299,7 +299,11 @@ function drawPreview() {
       const points=RoiGeometry.corners(roi,digitSize());ctx.beginPath();
       points.forEach((p,index)=>{if(index)ctx.lineTo(p.x*canvas.width,p.y*canvas.height);else ctx.moveTo(p.x*canvas.width,p.y*canvas.height);});ctx.closePath();return points;
     }
-    current.config.rois.forEach((roi, index) => { const points=outline(roi),x=points[0].x*canvas.width,y=points[0].y*canvas.height;ctx.strokeStyle=$("editGroup").checked?"#ffd46a":"#8ff5bc";ctx.stroke();ctx.fillStyle="#123a2a";ctx.fillRect(x,y,25,23);ctx.fillStyle="#c5ffdd";ctx.fillText(String(index+1),x+5,y+18); });
+    const digitBounds=current.config.rois.map(roi=>{
+      const points=outline(roi);ctx.strokeStyle=$("editGroup").checked?"#ffd46a":"#8ff5bc";ctx.stroke();
+      return {left:Math.min(...points.map(p=>p.x))*canvas.width,right:Math.max(...points.map(p=>p.x))*canvas.width,
+        top:Math.min(...points.map(p=>p.y))*canvas.height,bottom:Math.max(...points.map(p=>p.y))*canvas.height};
+    });
     const roi=current.config.rois[selectedDigit];
     if(roi && digitMode==="edit" && !$("editGroup").checked) {
       outline(roi);ctx.fillStyle="#ffd46a22";ctx.fill();ctx.strokeStyle="#ffd46a";ctx.stroke();
@@ -313,6 +317,20 @@ function drawPreview() {
       }
     }
     if (startPoint && draftPoint) { ctx.strokeStyle="#ffffff";ctx.setLineDash([5,4]);ctx.strokeRect(startPoint.x*canvas.width,startPoint.y*canvas.height,(draftPoint.x-startPoint.x)*canvas.width,(draftPoint.y-startPoint.y)*canvas.height);ctx.setLineDash([]); }
+    // Keep upright number badges outside the entire rotated box, clear of the digit.
+    ctx.save();ctx.textBaseline="middle";
+    const fontSize=Math.max(15,canvas.width/45),padding=fontSize/3,gap=Math.max(5,ctx.lineWidth*2),placed=[];
+    const overlaps=(a,b)=>a.x<b.right && a.x+a.w>b.left && a.y<b.bottom && a.y+a.h>b.top;
+    digitBounds.forEach((bounds,index)=>{
+      const text=String(index+1),w=Math.ceil(ctx.measureText(text).width+padding*2),h=Math.ceil(fontSize+padding*2);
+      const x=Math.max(0,Math.min(bounds.left,canvas.width-w)),y=Math.max(0,Math.min(bounds.top,canvas.height-h));
+      const candidates=[{x,y:bounds.top-gap-h},{x,y:bounds.bottom+gap},{x:bounds.right+gap,y},{x:bounds.left-gap-w,y}].map(p=>({...p,w,h}));
+      const visible=candidates.filter(p=>p.x>=0 && p.y>=0 && p.x+w<=canvas.width && p.y+h<=canvas.height);
+      const badge=visible.find(p=>!digitBounds.some(b=>overlaps(p,b)) && !placed.some(b=>overlaps(p,b))) || visible[0] || candidates[0];
+      ctx.fillStyle="#123a2a";ctx.fillRect(badge.x,badge.y,w,h);ctx.fillStyle="#c5ffdd";ctx.fillText(text,badge.x+padding,badge.y+h/2);
+      placed.push({left:badge.x,top:badge.y,right:badge.x+w,bottom:badge.y+h});
+    });
+    ctx.restore();
     for(const [index,anchor] of (current.config.alignment?.anchors||[]).entries()){outline(anchor);ctx.strokeStyle="#72c8ff";ctx.stroke();ctx.fillStyle="#72c8ff";ctx.fillText(`L${index+1}`,anchor.x*canvas.width,Math.max(18,anchor.y*canvas.height-5));}
   }
   $("original").classList.toggle("active", showingOriginal); $("overlay").classList.toggle("active", !showingOriginal);

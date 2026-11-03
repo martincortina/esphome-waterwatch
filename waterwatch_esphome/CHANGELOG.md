@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+- Preview digit numbers sit outside the boxes, including rotated regions, so the
+  meter digits stay visible while calibrating. Badges move below or beside boxes
+  near image edges and avoid neighbouring regions where space permits.
+
 ## 0.7.0
 
 - Optional reference-image alignment using two fixed landmarks, with confidence,
