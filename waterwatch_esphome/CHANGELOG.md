@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Select existing digit boxes and drag to move or resize them with eight handles.
+- Select overlapping digits from the picker, delete a selected box, and undo/redo edits.
+- Fine keyboard adjustments and zoom-aware handles; digit order is preserved.
+- Save or discard the edited layout; orientation changes reset the edit history.
+
 ## 0.4.0
 
 - Rotate photographs by 90 degrees or fine-tune any angle to level the meter digits.

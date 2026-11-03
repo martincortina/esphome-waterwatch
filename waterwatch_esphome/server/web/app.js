@@ -5,6 +5,7 @@ let token = "", meters = [], current = null, savedConfig = null, picture = null;
 let cameras = [], flashLights = [], historyRows = [], ingress = false, busy = false, dirty = false, jsonDraft = false;
 let showingOriginal = false, startPoint = null, draftPoint = null, layoutMeterId = null, messageTimer;
 let sourceBlob = null, transformEpoch = 0, transformAbort = null, rotationTimer, transformPending = false;
+let selectedDigit = -1, digitMode = "edit", digitDrag = null, digitUndo = [], digitRedo = [];
 const canvas = $("preview"), ctx = canvas.getContext("2d"), stage = $("previewStage");
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const reasons = {
@@ -66,12 +67,13 @@ function updateControls() {
   for (const id of ["flashEntity","flashBrightness"]) $(id).disabled = busy || !fromHa || !$("flashEnabled").checked;
   $("led").disabled = $("resolution").disabled = busy || fromHa;
   $("save").disabled = $("discard").disabled = busy || !dirty;
-  $("undoRoi").disabled = $("clearRois").disabled = busy || !current?.config.rois.length;
+  $("clearRois").disabled = busy || !current?.config.rois.length;
   $("original").disabled = $("overlay").disabled = busy || !sourceBlob;
   $("zoom").disabled = busy || !picture;
   $("cameraPreview").textContent = dirty ? "Save & preview" : "Preview";
   $("cameraTest").textContent = dirty ? "Save & test OCR" : "Test OCR";
   for (const id of ["rotateLeft","rotateRight","rotation","rotationSlider","resetRotation"]) $(id).disabled = busy || !current;
+  updateDigitControls();
 }
 function sourceControls() {
   const fromHa = $("sourceKind").value === "home_assistant";
@@ -153,7 +155,57 @@ $("setupHintAction").onclick = () => {
   if (target === "baseline") { showView("history"); $("baselinePanel").open = true; $("manualValue").focus(); }
   else { showView("capture"); if (target === "camera") { $("cameraSettings").open = true; $("sourceKind").focus(); } else $("cameraPreview").click(); }
 };
-function updateRegionCount() { $("roiCount").textContent = `${current?.config.rois.length || 0} regions`; }
+function updateRegionCount() { $("roiCount").textContent = `${current?.config.rois.length || 0} regions`; renderDigitSelection(); }
+function digitEditorReady() { return Boolean(current && picture && !busy && !transformPending && !showingOriginal && !jsonDraft && JSON.stringify(current.config.perspective) === JSON.stringify(savedConfig?.perspective)); }
+function updateDigitControls() {
+  const ready=digitEditorReady(), count=current?.config.rois.length || 0;
+  $("editDigits").disabled=!ready; $("addDigit").disabled=!ready || count>=12;
+  $("selectedDigit").disabled=!ready || !count;
+  $("deleteDigit").disabled=!ready || selectedDigit<0 || selectedDigit>=count;
+  $("undoRoi").disabled=!ready || !digitUndo.length; $("redoRoi").disabled=!ready || !digitRedo.length;
+  $("clearRois").disabled=!ready || !count;
+  $("editDigits").classList.toggle("active",digitMode==="edit"); $("addDigit").classList.toggle("active",digitMode==="add");
+  $("editDigits").setAttribute("aria-pressed",String(digitMode==="edit")); $("addDigit").setAttribute("aria-pressed",String(digitMode==="add"));
+  $("digitHelp").textContent=digitMode==="add" ? "Drag a new box around the next digit. Switch to Edit digits to adjust existing boxes." : "Click a digit box, then drag inside to move it or drag a handle to resize. Numbers define reading order.";
+  canvas.style.cursor=digitCursor(digitDrag);
+}
+function renderDigitSelection() {
+  const count=current?.config.rois.length || 0;
+  if(selectedDigit>=count) selectedDigit=count-1;
+  const select=$("selectedDigit");
+  if(select.options.length!==count+1) select.replaceChildren(new Option("Select a digit","-1"),...Array.from({length:count},(_,index)=>new Option(`Digit ${index+1}`,String(index))));
+  select.value=String(selectedDigit); $("digitSelection").textContent=selectedDigit<0?"No digit selected":`Digit ${selectedDigit+1} selected`;
+  updateDigitControls();
+}
+function resetDigitEditor() { selectedDigit=-1; digitDrag=null; startPoint=null; draftPoint=null; digitUndo=[]; digitRedo=[]; digitMode=current?.config.rois.length?"edit":"add"; renderDigitSelection(); }
+function digitSnapshot() { return {rois:structuredClone(current.config.rois),selected:selectedDigit}; }
+function restoreDigitSnapshot(snapshot) { current.config.rois=structuredClone(snapshot.rois); selectedDigit=snapshot.selected; digitDrag=null; startPoint=null; draftPoint=null; }
+function digitEditChanged() {
+  $("config").value=JSON.stringify(editedConfig(),null,2);
+  $("resultCard").hidden=true; $("testResult").textContent=""; $("processed").hidden=true;
+  setDirty(jsonDraft || JSON.stringify(editedConfig())!==JSON.stringify(savedConfig)); drawPreview(); updateHint();
+}
+function commitDigitEdit(before) {
+  if(before.rois.length===current.config.rois.length && before.rois.every((roi,index)=>["x","y","w","h"].every(key=>Math.abs(roi[key]-current.config.rois[index][key])<1e-12))) { current.config.rois=structuredClone(before.rois); drawPreview(); return; }
+  digitUndo.push(before); if(digitUndo.length>50)digitUndo.shift(); digitRedo=[]; digitEditChanged();
+}
+function undoDigitEdit(redo=false) {
+  if(!digitEditorReady())return;
+  const source=redo?digitRedo:digitUndo, destination=redo?digitUndo:digitRedo;
+  if(!source.length)return;
+  destination.push(digitSnapshot()); restoreDigitSnapshot(source.pop()); digitEditChanged();
+}
+function deleteSelectedDigit() {
+  if(!digitEditorReady() || !current.config.rois[selectedDigit])return;
+  const before=digitSnapshot();current.config.rois.splice(selectedDigit,1);selectedDigit=Math.min(selectedDigit,current.config.rois.length-1);commitDigitEdit(before);
+}
+function minimumDigitSize() { return {w:Math.min(1,9/canvas.width),h:Math.min(1,9/canvas.height)}; }
+function digitHit(point) { const box=canvas.getBoundingClientRect(),radius=window.matchMedia("(pointer: coarse)").matches?13:8;return RoiGeometry.hitTest(current.config.rois,point,{x:radius/box.width,y:radius/box.height},selectedDigit); }
+function digitCursor(hit) { return !digitEditorReady()?"default":digitMode==="add"?"crosshair":!hit?"default":hit.handle==="move"?"move":`${hit.handle}-resize`; }
+$("editDigits").onclick=()=>{digitMode="edit";drawPreview();};
+$("addDigit").onclick=()=>{digitMode="add";drawPreview();};
+$("selectedDigit").onchange=()=>{selectedDigit=Number($("selectedDigit").value);digitMode="edit";drawPreview();};
+$("deleteDigit").onclick=deleteSelectedDigit;
 function resizePreview() {
   if ($("captureView").hidden) return;
   const zoom = Number($("zoom").value) / 100;
@@ -162,18 +214,30 @@ function resizePreview() {
   canvas.style.width = `${Math.floor(canvas.width * fit * zoom)}px`; canvas.style.height = `${Math.floor(canvas.height * fit * zoom)}px`;
   stage.classList.toggle("zoomed", zoom > 1); $("zoomValue").value = `${Math.round(zoom * 100)}%`;
 }
-new ResizeObserver(resizePreview).observe(stage);
-$("zoom").oninput = resizePreview;
+new ResizeObserver(drawPreview).observe(stage);
+$("zoom").oninput = drawPreview;
 function drawPreview() {
+  resizePreview();
   ctx.clearRect(0, 0, canvas.width, canvas.height); $("previewEmpty").hidden = Boolean(picture);
   if (picture) ctx.drawImage(picture, 0, 0, canvas.width, canvas.height);
   if (current && !showingOriginal) {
     ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.font = `${Math.max(15, canvas.width / 45)}px sans-serif`;
     current.config.rois.forEach((roi, index) => { const x=roi.x*canvas.width,y=roi.y*canvas.height;ctx.strokeStyle="#8ff5bc";ctx.strokeRect(x,y,roi.w*canvas.width,roi.h*canvas.height);ctx.fillStyle="#123a2a";ctx.fillRect(x,y,25,23);ctx.fillStyle="#c5ffdd";ctx.fillText(String(index+1),x+5,y+18); });
+    const roi=current.config.rois[selectedDigit];
+    if(roi && digitMode==="edit") {
+      const x=roi.x*canvas.width,y=roi.y*canvas.height;
+      ctx.fillStyle="#ffd46a22";ctx.fillRect(x,y,roi.w*canvas.width,roi.h*canvas.height);
+      ctx.strokeStyle="#ffd46a";ctx.strokeRect(x,y,roi.w*canvas.width,roi.h*canvas.height);
+      const box=canvas.getBoundingClientRect(),w=9*canvas.width/Math.max(1,box.width),h=9*canvas.height/Math.max(1,box.height);
+      for(const handle of Object.values(RoiGeometry.handles(roi))) {
+        const hx=handle.x*canvas.width-w/2,hy=handle.y*canvas.height-h/2;
+        ctx.fillStyle="#ffd46a";ctx.fillRect(hx,hy,w,h);ctx.strokeStyle="#1e241f";ctx.strokeRect(hx,hy,w,h);
+      }
+    }
     if (startPoint && draftPoint) { ctx.strokeStyle="#ffffff";ctx.setLineDash([5,4]);ctx.strokeRect(startPoint.x*canvas.width,startPoint.y*canvas.height,(draftPoint.x-startPoint.x)*canvas.width,(draftPoint.y-startPoint.y)*canvas.height);ctx.setLineDash([]); }
   }
   $("original").classList.toggle("active", showingOriginal); $("overlay").classList.toggle("active", !showingOriginal);
-  updateRegionCount(); resizePreview();
+  updateRegionCount();
 }
 async function setPicture(blob, epoch = transformEpoch) {
   const decoded = await createImageBitmap(blob);
@@ -187,6 +251,7 @@ async function renderSourceImage() {
   transformAbort?.abort(); transformAbort = new AbortController();
   if (!sourceBlob || !current) { transformPending = false; return; }
   transformPending = true; $("rotationStatus").textContent = "Updating preview…";
+  updateControls();
   const cfg = current.config, original = showingOriginal;
   try {
     let blob = sourceBlob;
@@ -208,11 +273,13 @@ function changeRotation(value) {
   $("rotation").value = $("rotationSlider").value = angle;
   if (angle === (current.config.rotation_degrees || 0)) return;
   current.config.rotation_degrees=angle; current.config.rois=[];
+  resetDigitEditor();
   $("resultCard").hidden=true; $("testResult").textContent=""; $("processed").hidden=true;
   startPoint=null; draftPoint=null; showingOriginal=false;
   $("config").value=JSON.stringify(editedConfig(),null,2); setDirty(); updateRegionCount(); updateHint(); drawPreview();
   clearTimeout(rotationTimer); transformEpoch++; transformAbort?.abort();
   transformPending=Boolean(sourceBlob); $("rotationStatus").textContent=sourceBlob?"Updating preview…":`${angle}° · Clockwise +`;
+  updateControls();
   rotationTimer=setTimeout(()=>{void renderSourceImage();},180);
   message("Rotation changed. Draw new digit regions, then save.");
 }
@@ -264,6 +331,7 @@ function renderHistory() {
 $("historyFilter").onchange = renderHistory;
 async function renderMeter() {
   current = meters.find(meter=>meter.config.id === $("meter").value) || null;
+  resetDigitEditor();
   $("meterWorkspace").hidden = !current;
   if (!current) { $("registration").hidden=false; return; }
   $("cameraToken").hidden = $("cameraToken").dataset.meter !== selected();
@@ -311,17 +379,86 @@ $("newId").oninput=()=>{customId=Boolean($("newId").value);};
 $("newName").oninput=()=>{if(!customId)$("newId").value=$("newName").value.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);};
 $("registerForm").onsubmit=act(async()=>{if(dirty)throw new Error("Save or discard changes before adding a meter.");const data=await(await api("/api/meters",{method:"POST",body:JSON.stringify({id:$("newId").value,name:$("newName").value})})).json();$("cameraToken").textContent=`${data.config.name} upload token (shown once): ${data.camera_token}`;$("cameraToken").dataset.meter=data.config.id;await refresh();$("meter").value=data.config.id;await renderMeter();$("registration").hidden=true;showView("capture");message("Meter created. Select Home Assistant camera, then find your devices.");});
 $("save").onclick=act(()=>saveConfiguration());
-$("discard").onclick=()=>{if(!current||!savedConfig)return;current.config=structuredClone(savedConfig);renderConfig();setDirty(false);void renderSourceImage();drawPreview();updateHint();message("Unsaved changes discarded.");};
+$("discard").onclick=()=>{if(!current||!savedConfig)return;current.config=structuredClone(savedConfig);resetDigitEditor();renderConfig();setDirty(false);void renderSourceImage();drawPreview();updateHint();message("Unsaved changes discarded.");};
 for(const element of document.querySelectorAll(".settings-column input, .settings-column select")){element.addEventListener("input",()=>{sourceControls();setDirty();});}
 $("config").oninput=()=>{jsonDraft=true;setDirty();};
-$("loadJson").onclick=()=>{try{const cfg=JSON.parse($("config").value);if(cfg.id!==selected())throw new Error("Meter ID cannot change.");if(!cfg.camera||!cfg.source||!Array.isArray(cfg.rois))throw new Error("Configuration must include camera, source and digit regions.");current.config=cfg;renderConfig();setDirty();drawPreview();void renderSourceImage();message("JSON loaded into the editor. Save to apply.");}catch(error){message(error.message,true);}};
+$("loadJson").onclick=()=>{try{const cfg=JSON.parse($("config").value);if(cfg.id!==selected())throw new Error("Meter ID cannot change.");if(!cfg.camera||!cfg.source||!Array.isArray(cfg.rois))throw new Error("Configuration must include camera, source and digit regions.");current.config=cfg;resetDigitEditor();renderConfig();setDirty();drawPreview();void renderSourceImage();message("JSON loaded into the editor. Save to apply.");}catch(error){message(error.message,true);}};
 function point(event){const box=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(event.clientX-box.left)/box.width)),y:Math.max(0,Math.min(1,(event.clientY-box.top)/box.height))};}
-canvas.onpointerdown=event=>{if(!current||!picture||busy||transformPending)return;if(showingOriginal){message("Switch to Aligned / regions before drawing digit boxes.",true);return;}if(JSON.stringify(current.config.perspective)!==JSON.stringify(savedConfig?.perspective)){message("Save perspective settings before drawing digit regions.",true);return;}startPoint=point(event);draftPoint=startPoint;canvas.setPointerCapture(event.pointerId);};
-canvas.onpointermove=event=>{if(startPoint){draftPoint=point(event);drawPreview();}};
-canvas.onpointerup=event=>{if(!startPoint||!current)return;const end=point(event),roi={x:Math.min(startPoint.x,end.x),y:Math.min(startPoint.y,end.y),w:Math.abs(startPoint.x-end.x),h:Math.abs(startPoint.y-end.y)};startPoint=null;draftPoint=null;if(roi.w>.005&&roi.h>.005){if(current.config.rois.length>=12)message("Up to 12 digit regions are supported.",true);else{current.config.rois.push(roi);$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();}}drawPreview();};
-canvas.onpointercancel=()=>{startPoint=null;draftPoint=null;drawPreview();};
-$("undoRoi").onclick=()=>{if(current){current.config.rois.pop();$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();drawPreview();}};
-$("clearRois").onclick=()=>{if(current){current.config.rois=[];$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();drawPreview();}};
+function cancelDigitDrag() {
+  if(!digitDrag)return;
+  restoreDigitSnapshot(digitDrag.before);drawPreview();
+}
+canvas.onpointerdown=event=>{
+  if(!event.isPrimary || event.button!==0 || digitDrag)return;
+  if(!digitEditorReady()) {
+    if(showingOriginal)message("Switch to Aligned / regions to edit digit boxes.",true);
+    else if(jsonDraft)message("Apply or discard the JSON edit before editing digits.",true);
+    else if(current && JSON.stringify(current.config.perspective)!==JSON.stringify(savedConfig?.perspective))message("Save perspective settings before editing digit regions.",true);
+    return;
+  }
+  event.preventDefault();canvas.focus({preventScroll:true});
+  const position=point(event),before=digitSnapshot();
+  if(digitMode==="add") {
+    if(current.config.rois.length>=12){message("Up to 12 digit regions are supported.",true);return;}
+    startPoint=position;draftPoint=position;digitDrag={kind:"add",before,pointerId:event.pointerId};
+  } else {
+    const hit=digitHit(position);
+    selectedDigit=hit?.index ?? -1;
+    if(hit)digitDrag={...hit,kind:"edit",before,origin:position,roi:{...current.config.rois[hit.index]},pointerId:event.pointerId};
+  }
+  if(digitDrag)canvas.setPointerCapture(event.pointerId);
+  drawPreview();
+};
+function updateDigitDrag(position) {
+  if(digitDrag.kind==="add")draftPoint=position;
+  else {
+    const {roi,origin,handle,index}=digitDrag;
+    const dx=position.x-origin.x,dy=position.y-origin.y;
+    const anchor=handle==="move"?null:RoiGeometry.handles(roi)[handle];
+    current.config.rois[index]=handle==="move"?RoiGeometry.move(roi,dx,dy):RoiGeometry.resize(roi,handle,{x:anchor.x+dx,y:anchor.y+dy},minimumDigitSize());
+  }
+  drawPreview();
+}
+canvas.onpointermove=event=>{
+  if(digitDrag && event.pointerId===digitDrag.pointerId)updateDigitDrag(point(event));
+  else if(current)canvas.style.cursor=digitCursor(digitEditorReady()?digitHit(point(event)):null);
+};
+canvas.onpointerup=event=>{
+  if(!digitDrag || event.pointerId!==digitDrag.pointerId)return;
+  updateDigitDrag(point(event));
+  const {before,kind}=digitDrag;
+  if(kind==="add") {
+    const roi=RoiGeometry.fromPoints(startPoint,draftPoint,minimumDigitSize());
+    if(roi){current.config.rois.push(roi);selectedDigit=current.config.rois.length-1;}
+    else message("Draw a box at least 9 image pixels wide and high.",true);
+  }
+  digitDrag=null;startPoint=null;draftPoint=null;
+  if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);
+  commitDigitEdit(before);
+};
+canvas.onpointercancel=canvas.onlostpointercapture=canvas.onblur=cancelDigitDrag;
+canvas.onkeydown=event=>{
+  if(event.key==="Escape") {
+    event.preventDefault();if(digitDrag)cancelDigitDrag();else{selectedDigit=-1;drawPreview();}return;
+  }
+  if(!digitEditorReady() || digitDrag)return;
+  if(event.ctrlKey || event.metaKey) {
+    if(event.key.toLowerCase()==="z"){event.preventDefault();undoDigitEdit(event.shiftKey);}
+    else if(event.key.toLowerCase()==="y"){event.preventDefault();undoDigitEdit(true);}
+    return;
+  }
+  if(["Delete","Backspace"].includes(event.key)){event.preventDefault();deleteSelectedDigit();return;}
+  const roi=current.config.rois[selectedDigit];
+  if(!roi || !["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key))return;
+  event.preventDefault();const before=digitSnapshot(),step=event.shiftKey?10:1;
+  const dx=(event.key==="ArrowRight"?step:event.key==="ArrowLeft"?-step:0)/canvas.width;
+  const dy=(event.key==="ArrowDown"?step:event.key==="ArrowUp"?-step:0)/canvas.height;
+  current.config.rois[selectedDigit]=event.altKey?RoiGeometry.resize(roi,dx?"e":"s",{x:roi.x+roi.w+dx,y:roi.y+roi.h+dy},minimumDigitSize()):RoiGeometry.move(roi,dx,dy);
+  commitDigitEdit(before);
+};
+$("undoRoi").onclick=()=>undoDigitEdit();
+$("redoRoi").onclick=()=>undoDigitEdit(true);
+$("clearRois").onclick=()=>{if(!digitEditorReady())return;const before=digitSnapshot();current.config.rois=[];selectedDigit=-1;commitDigitEdit(before);};
 $("original").onclick=act(async()=>{showingOriginal=true;await renderSourceImage();});$("overlay").onclick=act(async()=>{showingOriginal=false;await renderSourceImage();});
 $("loadCameras").onclick=act(async()=>{const camera=$("cameraEntity").value,light=$("flashEntity").value;[cameras,flashLights]=await Promise.all([api("/api/home-assistant/cameras").then(response=>response.json()),api("/api/home-assistant/flash-lights").then(response=>response.json())]);renderChoices("cameraEntity",cameras,camera,"Select a camera");renderChoices("flashEntity",flashLights,light,"Select the meter’s ESPHome light");message(cameras.length?"Devices loaded. Select your meter camera and optional flash light.":"No cameras found in Home Assistant.");});
 $("cameraPreview").onclick=act(async()=>{if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const response=await api(`/api/meters/${selected()}/camera-image`,{method:"POST"});sourceBlob=await response.blob();showingOriginal=false;await renderSourceImage();$("imageStamp").textContent="Live preview · Not recorded";$("processed").hidden=true;message("Rotate the image to level the digits, then draw one box per digit and save.");});

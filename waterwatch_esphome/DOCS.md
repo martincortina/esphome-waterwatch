@@ -88,6 +88,17 @@ The local-ZIP method below is an alternative for manual installations.
   save. The angle is stored per meter and applies to both preview and host OCR.
   Changing it clears the previous regions; Discard restores the saved calibration.
   Original shows the unchanged source image. Rotation never triggers another flash.
+- To refine existing regions, use **Edit digits**: click a box, drag inside to move
+  it, or drag one of its eight handles to resize. The selected box is yellow.
+  The **Digit** picker also selects boxes when they overlap. **Delete digit** removes
+  only that box; **Undo / Redo** restore edits, additions, deletions and Clear.
+  **Add digit** draws another box in reading order (up to 12). Editing a box keeps
+  its number. Handles stay usable when zoomed; boxes remain inside the image.
+- With the image focused, arrow keys move the selected region by one image pixel;
+  Shift moves by ten. Alt + arrows resize its right/bottom edges. Delete removes the
+  selection, Ctrl/Cmd + Z undoes, Ctrl/Cmd + Shift + Z redoes, and Escape cancels a
+  drag or clears selection. The editor keeps up to 50 undo steps during the session.
+  Changing meter, applying JSON, discarding changes or rotating resets this history.
 - The save bar shows unsaved changes. **Save & preview** and **Save & test OCR** save
   the edited configuration before that action. **Discard changes** restores the last
   saved configuration. Refresh and meter switching preserve unsaved work until you

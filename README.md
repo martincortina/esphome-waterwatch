@@ -5,7 +5,7 @@ run OpenCV/Tesseract recognition locally on the **Home Assistant host**.
 
 [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fmartincortina%2Fesphome-waterwatch)
 
-![Dark workshop with synthetic demonstration data](docs/webui-dark-0.3.0.jpg)
+![Digit editing with synthetic demonstration data](docs/webui-digits-0.5.0.jpg)
 
 *Interface preview uses synthetic meter data and a test recognizer; it is not a
 measurement of real-meter OCR accuracy.*
@@ -35,6 +35,8 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
   static perspective correction, dry-run OCR and a dedicated history view.
 - Quarter turns and fine-angle straightening, saved per meter and applied before
   OCR crops the digits. Original camera images stay unchanged.
+- Edit existing digit boxes by selecting and dragging them or their resize handles.
+  Undo/redo, individual deletion and keyboard adjustments help refine calibration.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 
@@ -52,6 +54,7 @@ or privileged device access are requested. Supervisor credentials remain in memo
 ```sh
 python -m pip install -r requirements-dev.lock
 python -m pytest -q
+node --test tests/roi_geometry.test.cjs
 python -m ruff check waterwatch_esphome/server tests
 docker build -t waterwatch-esphome:dev ./waterwatch_esphome
 ```
