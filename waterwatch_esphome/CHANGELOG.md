@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- Rotate each digit box independently with a round handle, angle field or quarter turns.
+- Rotated boxes support selection, movement, resizing, undo/redo and saved calibration.
+- Host OCR rectifies each oriented region before checking quality and reading its digit.
+- Legacy digit boxes default to 0 degrees; image rotation remains independent.
+
 ## 0.5.0
 
 - Select existing digit boxes and drag to move or resize them with eight handles.

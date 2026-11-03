@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from server.models import MeterConfig
+from server.models import ROI, MeterConfig
 
 
 @dataclass
@@ -84,6 +84,41 @@ def align(image, cfg: MeterConfig):
     return rotate(corrected, cfg.rotation_degrees)
 
 
+def digit_corners(roi: ROI, width: int, height: int):
+    """Clockwise TL/TR/BR/BL image-edge coordinates, matching the canvas editor."""
+    center = np.array([(roi.x + roi.w / 2) * width, (roi.y + roi.h / 2) * height])
+    theta = math.radians(roi.rotation_degrees)
+    matrix = np.array([[math.cos(theta), -math.sin(theta)],
+                       [math.sin(theta), math.cos(theta)]])
+    offsets = np.array([[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]])
+    return (offsets * (roi.w * width, roi.h * height)) @ matrix.T + center
+
+
+def crop_digit(image, roi: ROI):
+    """Rectify one oriented digit box before image-quality checks and recognition."""
+    height, width = image.shape[:2]
+    w, h = int(roi.w * width), int(roi.h * height)
+    if min(w, h) < 8:
+        raise ValueError("roi_too_small")
+    corners = digit_corners(roi, width, height)
+    if np.any(corners < -.001) or np.any(corners > np.array([width, height]) + .001):
+        raise ValueError("roi_outside_image")
+    if roi.rotation_degrees == 0:
+        x, y = int(roi.x * width), int(roi.y * height)
+        return image[y:y+h, x:x+w]
+    if max(width, height, w, h) >= 32767:
+        raise ValueError("roi_transform_too_large")
+    # Map pixel centres (half a pixel inside the box edges) to the upright crop.
+    # Shrink in the box's local axes, then convert edge coordinates to CV centres.
+    local = roi.model_copy(update={"w": roi.w * (w-1)/w, "h": roi.h * (h-1)/h,
+                                   "x": roi.x + roi.w/(2*w), "y": roi.y + roi.h/(2*h)})
+    pixel_corners = (digit_corners(local, width, height) - .5).astype(np.float32)
+    destination = np.float32([[0, 0], [w-1, 0], [w-1, h-1], [0, h-1]])
+    matrix = cv2.getPerspectiveTransform(pixel_corners, destination)
+    return cv2.warpPerspective(image, matrix, (w, h), flags=cv2.INTER_CUBIC,
+                               borderMode=cv2.BORDER_REPLICATE)
+
+
 class TesseractEngine:
     """CPU baseline. Scores are engine scores, not calibrated probabilities."""
 
@@ -139,15 +174,17 @@ class Pipeline:
             return Recognition(reason="roi_not_configured", overlay=jpeg(image))
         digits, confidences, diagnostics, previews = [], [], [], []
         for index, roi in enumerate(cfg.rois):
-            x, y = int(roi.x * width), int(roi.y * height)
-            w, h = int(roi.w * width), int(roi.h * height)
-            if min(w, h) < 8:
-                return Recognition(reason="roi_too_small", overlay=jpeg(overlay))
-            patch = cv2.cvtColor(image[y : y + h, x : x + w], cv2.COLOR_BGR2GRAY)
+            corners = digit_corners(roi, width, height)
+            try:
+                patch = cv2.cvtColor(crop_digit(image, roi), cv2.COLOR_BGR2GRAY)
+            except ValueError as error:
+                return Recognition(reason=str(error), details={"digit": index}, overlay=jpeg(overlay))
             sharpness = float(cv2.Laplacian(patch, cv2.CV_64F).var())
             brightness = float(patch.mean())
-            diagnostics.append({"digit": index, "sharpness": sharpness, "brightness": brightness})
-            cv2.rectangle(overlay, (x, y), (x + w, y + h), (80, 210, 80), 2)
+            diagnostics.append({"digit": index, "sharpness": sharpness, "brightness": brightness,
+                                "rotation_degrees": roi.rotation_degrees})
+            cv2.polylines(overlay, [np.rint(corners).astype(np.int32)], True, (80, 210, 80), 2)
+            x, y = np.rint(corners[0]).astype(int)
             cv2.putText(
                 overlay,
                 str(index),

@@ -52,3 +52,46 @@ test('drawing backwards normalizes coordinates and enforces minimum size', () =>
   assert.equal(geometry.fromPoints({x:.2,y:.3},{x:.21,y:.31},minimum),null);
   assert.deepEqual(geometry.fromPoints({x:-1,y:-1},{x:2,y:2},minimum),{x:0,y:0,w:1,h:1});
 });
+
+const imageSize={width:320,height:240};
+const oriented={x:140/320,y:80/240,w:40/320,h:80/240,rotation_degrees:90};
+test('quarter-turn digit geometry uses pixels on a nonsquare image',()=>{
+  const points=geometry.corners(oriented,imageSize);
+  const expected=[[200,100],[200,140],[120,140],[120,100]];
+  points.forEach((p,i)=>{close(p.x*320,expected[i][0]);close(p.y*240,expected[i][1]);});
+  assert.equal(geometry.contains(oriented,{x:190/320,y:120/240},imageSize),true);
+  assert.equal(geometry.contains(oriented,{x:160/320,y:90/240},imageSize),false);
+});
+test('rotated box movement clamps every corner and preserves angle and size',()=>{
+  const moved=geometry.move(oriented,-8,9,imageSize);
+  assert.equal(geometry.inside(moved,imageSize),true);
+  close(moved.w,oriented.w);close(moved.h,oriented.h);assert.equal(moved.rotation_degrees,90);
+});
+test('all rotated resize handles keep the opposite world anchor fixed',()=>{
+  const box={...oriented,rotation_degrees:27},opposite={nw:'se',n:'s',ne:'sw',e:'w',se:'nw',s:'n',sw:'ne',w:'e'};
+  for(const [handle,other] of Object.entries(opposite)){
+    const old=geometry.handles(box,imageSize),p={x:old[handle].x+.01,y:old[handle].y+.02};
+    const resized=geometry.resize(box,handle,p,{w:9/320,h:9/240},imageSize);
+    const anchor=geometry.handles(resized,imageSize)[other];
+    close(anchor.x,old[other].x);close(anchor.y,old[other].y);
+    assert.equal(resized.rotation_degrees,27);assert.equal(geometry.inside(resized,imageSize),true);
+  }
+});
+test('rotated resize stops at the image boundary without moving the opposite corner',()=>{
+  const box={...oriented,rotation_degrees:30},before=geometry.handles(box,imageSize).nw;
+  const resized=geometry.resize(box,'se',{x:2,y:2},{w:9/320,h:9/240},imageSize);
+  assert.equal(geometry.inside(resized,imageSize),true);
+  const after=geometry.handles(resized,imageSize).nw;close(before.x,after.x);close(before.y,after.y);
+});
+test('angle changes shift near-edge boxes into bounds or reject impossible fits',()=>{
+  const changed=geometry.rotate({...oriented,x:0,y:0,rotation_degrees:0},90,imageSize);
+  assert.equal(geometry.inside(changed,imageSize),true);
+  assert.equal(geometry.rotate({x:0,y:0,w:1,h:1},90,imageSize),null);
+  assert.equal(geometry.rotate(oriented,270,imageSize).rotation_degrees,-90);
+});
+test('rotated handles and external rotation knob are hit before a box body',()=>{
+  const points=geometry.handles(oriented,imageSize),knob=geometry.rotationHandle(oriented,25,imageSize);
+  assert.deepEqual(geometry.hitTest([oriented],points.nw,{x:.01,y:.01},0,imageSize,knob),{index:0,handle:'nw'});
+  assert.deepEqual(geometry.hitTest([oriented],knob,{x:.01,y:.01},0,imageSize,knob),{index:0,handle:'rotate'});
+  close(geometry.angleAt(oriented,knob,imageSize),0);
+});

@@ -11,6 +11,7 @@ const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const reasons = {
   ok:"Verified", candidate:"Recognized", accepted:"Accepted", stale:"Reading is stale",
   baseline_required:"Baseline required", manual_baseline:"Verified manually", roi_not_configured:"Set digit regions",
+  roi_outside_image:"A rotated digit box extends outside the image. Adjust its angle, size or position",
   ambiguous_digit:"Ambiguous digit", poor_image_quality:"Image needs adjustment", unreadable:"Unreadable",
   camera_unavailable:"Camera unavailable", camera_repeated_frame:"Repeated camera image",
   flash_light_must_be_off:"Turn the meter light off before a flash capture",
@@ -162,11 +163,12 @@ function updateDigitControls() {
   $("editDigits").disabled=!ready; $("addDigit").disabled=!ready || count>=12;
   $("selectedDigit").disabled=!ready || !count;
   $("deleteDigit").disabled=!ready || selectedDigit<0 || selectedDigit>=count;
+  for(const id of ["digitAngle","digitRotateLeft","digitRotateRight","digitResetAngle"])$(id).disabled=!ready || selectedDigit<0 || selectedDigit>=count || digitMode!=="edit";
   $("undoRoi").disabled=!ready || !digitUndo.length; $("redoRoi").disabled=!ready || !digitRedo.length;
   $("clearRois").disabled=!ready || !count;
   $("editDigits").classList.toggle("active",digitMode==="edit"); $("addDigit").classList.toggle("active",digitMode==="add");
   $("editDigits").setAttribute("aria-pressed",String(digitMode==="edit")); $("addDigit").setAttribute("aria-pressed",String(digitMode==="add"));
-  $("digitHelp").textContent=digitMode==="add" ? "Drag a new box around the next digit. Switch to Edit digits to adjust existing boxes." : "Click a digit box, then drag inside to move it or drag a handle to resize. Numbers define reading order.";
+  $("digitHelp").textContent=digitMode==="add" ? "Drag a new box around the next digit. Switch to Edit digits to adjust existing boxes." : "Select a box: drag inside to move, square handles to resize, or the round handle to rotate. Numbers define reading order.";
   canvas.style.cursor=digitCursor(digitDrag);
 }
 function renderDigitSelection() {
@@ -175,6 +177,7 @@ function renderDigitSelection() {
   const select=$("selectedDigit");
   if(select.options.length!==count+1) select.replaceChildren(new Option("Select a digit","-1"),...Array.from({length:count},(_,index)=>new Option(`Digit ${index+1}`,String(index))));
   select.value=String(selectedDigit); $("digitSelection").textContent=selectedDigit<0?"No digit selected":`Digit ${selectedDigit+1} selected`;
+  if(document.activeElement!==$("digitAngle"))$("digitAngle").value=current?.config.rois[selectedDigit]?.rotation_degrees || 0;
   updateDigitControls();
 }
 function resetDigitEditor() { selectedDigit=-1; digitDrag=null; startPoint=null; draftPoint=null; digitUndo=[]; digitRedo=[]; digitMode=current?.config.rois.length?"edit":"add"; renderDigitSelection(); }
@@ -186,7 +189,7 @@ function digitEditChanged() {
   setDirty(jsonDraft || JSON.stringify(editedConfig())!==JSON.stringify(savedConfig)); drawPreview(); updateHint();
 }
 function commitDigitEdit(before) {
-  if(before.rois.length===current.config.rois.length && before.rois.every((roi,index)=>["x","y","w","h"].every(key=>Math.abs(roi[key]-current.config.rois[index][key])<1e-12))) { current.config.rois=structuredClone(before.rois); drawPreview(); return; }
+  if(before.rois.length===current.config.rois.length && before.rois.every((roi,index)=>["x","y","w","h","rotation_degrees"].every(key=>Math.abs((roi[key]||0)-(current.config.rois[index][key]||0))<1e-12))) { current.config.rois=structuredClone(before.rois); drawPreview(); return; }
   digitUndo.push(before); if(digitUndo.length>50)digitUndo.shift(); digitRedo=[]; digitEditChanged();
 }
 function undoDigitEdit(redo=false) {
@@ -200,8 +203,28 @@ function deleteSelectedDigit() {
   const before=digitSnapshot();current.config.rois.splice(selectedDigit,1);selectedDigit=Math.min(selectedDigit,current.config.rois.length-1);commitDigitEdit(before);
 }
 function minimumDigitSize() { return {w:Math.min(1,9/canvas.width),h:Math.min(1,9/canvas.height)}; }
-function digitHit(point) { const box=canvas.getBoundingClientRect(),radius=window.matchMedia("(pointer: coarse)").matches?13:8;return RoiGeometry.hitTest(current.config.rois,point,{x:radius/box.width,y:radius/box.height},selectedDigit); }
-function digitCursor(hit) { return !digitEditorReady()?"default":digitMode==="add"?"crosshair":!hit?"default":hit.handle==="move"?"move":`${hit.handle}-resize`; }
+function digitSize() { return {width:canvas.width,height:canvas.height}; }
+function digitRotationHandle(roi) { const box=canvas.getBoundingClientRect();return RoiGeometry.rotationHandle(roi,25*canvas.height/Math.max(1,box.height),digitSize()); }
+function digitHit(point) { const box=canvas.getBoundingClientRect(),radius=window.matchMedia("(pointer: coarse)").matches?13:8,roi=current.config.rois[selectedDigit];return RoiGeometry.hitTest(current.config.rois,point,{x:radius/box.width,y:radius/box.height},selectedDigit,digitSize(),roi?digitRotationHandle(roi):null); }
+function digitCursor(hit) {
+  if(!digitEditorReady())return "default";if(digitMode==="add")return "crosshair";if(!hit)return "default";
+  if(hit.handle==="move")return "move";if(hit.handle==="rotate")return "grab";
+  const angles={e:0,se:45,s:90,sw:135,w:180,nw:225,n:270,ne:315};
+  return ["ew-resize","nwse-resize","ns-resize","nesw-resize"][((Math.round((angles[hit.handle]+(current.config.rois[hit.index]?.rotation_degrees||0))/45)%4)+4)%4];
+}
+function changeDigitRotation(value,updateInput=true) {
+  if(!digitEditorReady() || !current.config.rois[selectedDigit])return;
+  const angle=Number(value);
+  if(String(value).trim()==="" || !Number.isFinite(angle) || angle < -180 || angle > 180){message("Use a digit angle from -180° to 180°.",true);$("digitAngle").value=current.config.rois[selectedDigit].rotation_degrees || 0;return;}
+  const before=digitSnapshot(),roi=RoiGeometry.rotate(current.config.rois[selectedDigit],angle,digitSize());
+  if(!roi){message("This angle cannot fit in the image. Make the digit box smaller first.",true);$("digitAngle").value=current.config.rois[selectedDigit].rotation_degrees || 0;return;}
+  current.config.rois[selectedDigit]=roi;if(updateInput)$("digitAngle").value=roi.rotation_degrees;commitDigitEdit(before);
+}
+$("digitAngle").oninput=()=>{const field=$("digitAngle");if(field.value.trim()!=="" && field.validity.valid)changeDigitRotation(field.value,false);};
+$("digitAngle").onchange=$("digitAngle").onblur=()=>changeDigitRotation($("digitAngle").value);
+$("digitRotateLeft").onclick=()=>changeDigitRotation((((current.config.rois[selectedDigit]?.rotation_degrees||0)-90+540)%360)-180);
+$("digitRotateRight").onclick=()=>changeDigitRotation((((current.config.rois[selectedDigit]?.rotation_degrees||0)+90+540)%360)-180);
+$("digitResetAngle").onclick=()=>changeDigitRotation(0);
 $("editDigits").onclick=()=>{digitMode="edit";drawPreview();};
 $("addDigit").onclick=()=>{digitMode="add";drawPreview();};
 $("selectedDigit").onchange=()=>{selectedDigit=Number($("selectedDigit").value);digitMode="edit";drawPreview();};
@@ -222,14 +245,19 @@ function drawPreview() {
   if (picture) ctx.drawImage(picture, 0, 0, canvas.width, canvas.height);
   if (current && !showingOriginal) {
     ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.font = `${Math.max(15, canvas.width / 45)}px sans-serif`;
-    current.config.rois.forEach((roi, index) => { const x=roi.x*canvas.width,y=roi.y*canvas.height;ctx.strokeStyle="#8ff5bc";ctx.strokeRect(x,y,roi.w*canvas.width,roi.h*canvas.height);ctx.fillStyle="#123a2a";ctx.fillRect(x,y,25,23);ctx.fillStyle="#c5ffdd";ctx.fillText(String(index+1),x+5,y+18); });
+    function outline(roi) {
+      const points=RoiGeometry.corners(roi,digitSize());ctx.beginPath();
+      points.forEach((p,index)=>{if(index)ctx.lineTo(p.x*canvas.width,p.y*canvas.height);else ctx.moveTo(p.x*canvas.width,p.y*canvas.height);});ctx.closePath();return points;
+    }
+    current.config.rois.forEach((roi, index) => { const points=outline(roi),x=points[0].x*canvas.width,y=points[0].y*canvas.height;ctx.strokeStyle="#8ff5bc";ctx.stroke();ctx.fillStyle="#123a2a";ctx.fillRect(x,y,25,23);ctx.fillStyle="#c5ffdd";ctx.fillText(String(index+1),x+5,y+18); });
     const roi=current.config.rois[selectedDigit];
     if(roi && digitMode==="edit") {
-      const x=roi.x*canvas.width,y=roi.y*canvas.height;
-      ctx.fillStyle="#ffd46a22";ctx.fillRect(x,y,roi.w*canvas.width,roi.h*canvas.height);
-      ctx.strokeStyle="#ffd46a";ctx.strokeRect(x,y,roi.w*canvas.width,roi.h*canvas.height);
+      outline(roi);ctx.fillStyle="#ffd46a22";ctx.fill();ctx.strokeStyle="#ffd46a";ctx.stroke();
       const box=canvas.getBoundingClientRect(),w=9*canvas.width/Math.max(1,box.width),h=9*canvas.height/Math.max(1,box.height);
-      for(const handle of Object.values(RoiGeometry.handles(roi))) {
+      const handles=RoiGeometry.handles(roi,digitSize()),rotation=digitRotationHandle(roi);
+      ctx.beginPath();ctx.moveTo(handles.n.x*canvas.width,handles.n.y*canvas.height);ctx.lineTo(rotation.x*canvas.width,rotation.y*canvas.height);ctx.strokeStyle="#ffd46a";ctx.stroke();
+      ctx.beginPath();ctx.ellipse(rotation.x*canvas.width,rotation.y*canvas.height,w*.7,h*.7,0,0,Math.PI*2);ctx.fillStyle="#ffd46a";ctx.fill();ctx.strokeStyle="#1e241f";ctx.stroke();
+      for(const handle of Object.values(handles)) {
         const hx=handle.x*canvas.width-w/2,hy=handle.y*canvas.height-h/2;
         ctx.fillStyle="#ffd46a";ctx.fillRect(hx,hy,w,h);ctx.strokeStyle="#1e241f";ctx.strokeRect(hx,hy,w,h);
       }
@@ -413,9 +441,15 @@ function updateDigitDrag(position) {
   if(digitDrag.kind==="add")draftPoint=position;
   else {
     const {roi,origin,handle,index}=digitDrag;
+    if(handle==="rotate") {
+      const delta=RoiGeometry.angleAt(roi,position,digitSize())-RoiGeometry.angleAt(roi,origin,digitSize());
+      const rotated=RoiGeometry.rotate(roi,(roi.rotation_degrees||0)+delta,digitSize());
+      if(rotated)current.config.rois[index]=rotated;
+      drawPreview();return;
+    }
     const dx=position.x-origin.x,dy=position.y-origin.y;
-    const anchor=handle==="move"?null:RoiGeometry.handles(roi)[handle];
-    current.config.rois[index]=handle==="move"?RoiGeometry.move(roi,dx,dy):RoiGeometry.resize(roi,handle,{x:anchor.x+dx,y:anchor.y+dy},minimumDigitSize());
+    const anchor=handle==="move"?null:RoiGeometry.handles(roi,digitSize())[handle];
+    current.config.rois[index]=handle==="move"?RoiGeometry.move(roi,dx,dy,digitSize()):RoiGeometry.resize(roi,handle,{x:anchor.x+dx,y:anchor.y+dy},minimumDigitSize(),digitSize());
   }
   drawPreview();
 }
@@ -449,11 +483,13 @@ canvas.onkeydown=event=>{
   }
   if(["Delete","Backspace"].includes(event.key)){event.preventDefault();deleteSelectedDigit();return;}
   const roi=current.config.rois[selectedDigit];
+  if(roi && ["BracketLeft","BracketRight"].includes(event.code)){event.preventDefault();changeDigitRotation((((roi.rotation_degrees||0)+(event.code==="BracketRight"?1:-1)*(event.shiftKey?10:1)+540)%360)-180);return;}
   if(!roi || !["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key))return;
   event.preventDefault();const before=digitSnapshot(),step=event.shiftKey?10:1;
   const dx=(event.key==="ArrowRight"?step:event.key==="ArrowLeft"?-step:0)/canvas.width;
   const dy=(event.key==="ArrowDown"?step:event.key==="ArrowUp"?-step:0)/canvas.height;
-  current.config.rois[selectedDigit]=event.altKey?RoiGeometry.resize(roi,dx?"e":"s",{x:roi.x+roi.w+dx,y:roi.y+roi.h+dy},minimumDigitSize()):RoiGeometry.move(roi,dx,dy);
+  const target=RoiGeometry.localPoint(roi,{x:dx?roi.x+roi.w+dx:roi.x+roi.w/2,y:dy?roi.y+roi.h+dy:roi.y+roi.h/2},digitSize());
+  current.config.rois[selectedDigit]=event.altKey?RoiGeometry.resize(roi,dx?"e":"s",target,minimumDigitSize(),digitSize()):RoiGeometry.move(roi,dx,dy,digitSize());
   commitDigitEdit(before);
 };
 $("undoRoi").onclick=()=>undoDigitEdit();

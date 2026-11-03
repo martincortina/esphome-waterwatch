@@ -5,7 +5,7 @@ run OpenCV/Tesseract recognition locally on the **Home Assistant host**.
 
 [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fmartincortina%2Fesphome-waterwatch)
 
-![Digit editing with synthetic demonstration data](docs/webui-digits-0.5.0.jpg)
+![Individual digit rotation with synthetic demonstration data](docs/webui-digit-rotation-0.6.0.jpg)
 
 *Interface preview uses synthetic meter data and a test recognizer; it is not a
 measurement of real-meter OCR accuracy.*
@@ -37,6 +37,8 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
   OCR crops the digits. Original camera images stay unchanged.
 - Edit existing digit boxes by selecting and dragging them or their resize handles.
   Undo/redo, individual deletion and keyboard adjustments help refine calibration.
+- Rotate individual digit boxes with an angle field or round handle. OCR rectifies
+  each oriented crop independently of the photograph's overall rotation.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 

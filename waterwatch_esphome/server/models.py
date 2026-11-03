@@ -37,6 +37,8 @@ class ROI(StrictModel):
     y: float = Field(ge=0, lt=1)
     w: float = Field(gt=0, le=1)
     h: float = Field(gt=0, le=1)
+    # Clockwise orientation of this box in the aligned image; OCR unrotates it.
+    rotation_degrees: float = Field(default=0, ge=-180, le=180)
 
     @model_validator(mode="after")
     def bounds(self):

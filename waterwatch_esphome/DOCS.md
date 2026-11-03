@@ -94,10 +94,19 @@ The local-ZIP method below is an alternative for manual installations.
   only that box; **Undo / Redo** restore edits, additions, deletions and Clear.
   **Add digit** draws another box in reading order (up to 12). Editing a box keeps
   its number. Handles stay usable when zoomed; boxes remain inside the image.
+- To tilt only one digit box, select it in **Edit digits**, then drag its round
+  rotation handle or use **Digit rotation → Angle**, quarter turns or Reset digit
+  angle. Positive angles turn the box clockwise; the host OCR rectifies this box
+  to an upright crop. The image's overall rotation and other digit boxes stay fixed.
+  A box near an edge may shift just enough to fit; resize it first if the requested
+  orientation cannot fit. Do not rotate a box unless the digit itself is tilted.
+  The square resize handles follow its new orientation and keep the opposite side
+  anchored. Angle changes are saved and support the same Undo / Redo history.
 - With the image focused, arrow keys move the selected region by one image pixel;
   Shift moves by ten. Alt + arrows resize its right/bottom edges. Delete removes the
   selection, Ctrl/Cmd + Z undoes, Ctrl/Cmd + Shift + Z redoes, and Escape cancels a
   drag or clears selection. The editor keeps up to 50 undo steps during the session.
+  The [ / ] keys rotate the selected box by 1° (Shift: 10°).
   Changing meter, applying JSON, discarding changes or rotating resets this history.
 - The save bar shows unsaved changes. **Save & preview** and **Save & test OCR** save
   the edited configuration before that action. **Discard changes** restores the last
@@ -111,6 +120,11 @@ The local-ZIP method below is an alternative for manual installations.
 
 Perspective points remain in the original source-image coordinates. Processing order
 is source image → perspective correction (if configured) → rotation → digit regions.
+Each region may have its own `rotation_degrees` in [-180, 180], defaulting to 0
+for older configurations. Its x/y/w/h describe the unrotated rectangle; it rotates
+about its centre in aligned-image pixel coordinates. OCR maps the oriented region
+to an upright crop before quality checks. Rotated corners must remain in the image;
+an invalid imported region returns `roi_outside_image` rather than reading it.
 The preview uses the same server transform as OCR. Quarter turns preserve pixels;
 fine-angle rotation expands the canvas with white borders so the image is not cropped.
 Old configurations default to 0°. Stored source images and historic readings remain

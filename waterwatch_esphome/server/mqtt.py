@@ -14,7 +14,7 @@ def discovery(cfg, prefix="waterwatch", discovery_prefix="homeassistant"):
         "name": cfg.name,
         "manufacturer": "WaterWatch DIY",
         "model": "Optical water meter",
-        "sw_version": "0.5.0",
+        "sw_version": "0.6.0",
     }
     definitions = [
         ("sensor", "total_m3", "Total water", "water", "m³", "total_increasing"),
