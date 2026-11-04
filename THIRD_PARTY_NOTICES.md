@@ -19,6 +19,8 @@ Dependencies retain their own licenses and notices; the root MIT license does no
 | NumPy | [NumPy](https://github.com/numpy/numpy), BSD-3-Clause |
 | Pillow | [Pillow](https://github.com/python-pillow/Pillow), MIT-CMU |
 | Tesseract + English traineddata | [Tesseract](https://github.com/tesseract-ocr/tesseract), [tessdata](https://github.com/tesseract-ocr/tessdata), Apache-2.0 |
+| ONNX Runtime CPU | [Microsoft](https://github.com/microsoft/onnxruntime), MIT |
+| PP-OCRv5 English mobile model | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), Apache-2.0; ONNX conversion distributed by [RapidAI](https://github.com/RapidAI/RapidOCR) |
 | Eclipse Paho MQTT Python | [Paho](https://github.com/eclipse-paho/paho.mqtt.python), EPL-2.0 / EDL-1.0 |
 | Caddy | [Caddy](https://github.com/caddyserver/caddy), Apache-2.0 |
 | Mosquitto (optional test broker) | [Mosquitto](https://github.com/eclipse-mosquitto/mosquitto), EPL-2.0 / EDL-1.0 |
@@ -27,3 +29,12 @@ Camera pin assignments are factual connector mappings checked against manufactur
 documentation; their example application implementations have not been copied. No model
 from the reference project or an unverified dataset is bundled. Add provenance and redistribution
 terms to `models/` before installing additional weights. Capture only your own meter images.
+
+The default host recognizer uses `en_PP-OCRv5_rec_mobile.onnx` from RapidAI's
+versioned `v3.10.0` model catalog. SHA-256:
+`c3461add59bb4323ecba96a492ab75e06dda42467c9e3d0c18db5d1d21924be8`.
+The image build downloads and checks that exact asset. It is not fetched at application
+startup. The upstream Apache-2.0 text is included at
+`server/licenses/paddleocr-apache-2.0.txt`. Digit-row normalization, two-pass agreement
+and cell mapping are WaterWatch application code. The BGR scaling and CTC model
+interface follow the public PaddleOCR/RapidOCR conventions.

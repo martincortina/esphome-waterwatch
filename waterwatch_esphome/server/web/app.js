@@ -179,6 +179,7 @@ function digitEditorReady() { return baseEditorReady() && landmarkTarget===null 
 function updateDigitControls() {
   const ready=digitEditorReady(), count=current?.config.rois.length || 0;
   $("editDigits").disabled=!ready; $("addDigit").disabled=!ready || count>=12;
+  $("drawDigitFrame").disabled=!ready;
   $("selectedDigit").disabled=!ready || !count;
   $("deleteDigit").disabled=!ready || selectedDigit<0 || selectedDigit>=count;
   $("editGroup").disabled=!ready || !count || digitMode!=="edit";
@@ -189,7 +190,7 @@ function updateDigitControls() {
   $("exportTest").disabled=busy || !lastTest;
   $("editDigits").classList.toggle("active",digitMode==="edit"); $("addDigit").classList.toggle("active",digitMode==="add");
   $("editDigits").setAttribute("aria-pressed",String(digitMode==="edit")); $("addDigit").setAttribute("aria-pressed",String(digitMode==="add"));
-  $("digitHelp").textContent=digitMode==="add" ? "Drag a new box around the next digit. Switch to Edit digits to adjust existing boxes." : "Select a box: drag inside to move, square handles to resize, or the round handle to rotate. Numbers define reading order.";
+  $("digitHelp").textContent=digitMode==="add" ? ($("drawDigitFrame").value==="inner" ? "Draw tightly around the complete digit. The outer OCR frame adds 20% margins on all sides. Leave room around the digit near photo edges." : "Draw the outer OCR crop. Its dashed inner 60% should fit the complete digit, with 20% margins on each side.") : "Fit each complete digit inside its dashed inner 60%. Move or resize the solid outer crop, or use the round handle to rotate. Numbers define reading order.";
   if($("editGroup").checked && digitMode==="edit")$("digitHelp").textContent="All digit boxes: drag any box to move the group, or use the angle controls to rotate it. Uncheck to resize one digit.";
   if(landmarkTarget!==null)$("digitHelp").textContent=`Draw a box around fixed landmark ${landmarkTarget+1}. Use a stationary, distinctive mark; Escape cancels.`;
   canvas.style.cursor=landmarkTarget!==null && baseEditorReady()?"crosshair":digitCursor(digitDrag);
@@ -258,6 +259,7 @@ $("digitRotateRight").onclick=()=>changeDigitRotation((((current.config.rois[sel
 $("digitResetAngle").onclick=()=>changeDigitRotation(0);
 $("editDigits").onclick=()=>{digitMode="edit";drawPreview();};
 $("addDigit").onclick=()=>{digitMode="add";drawPreview();};
+$("drawDigitFrame").onchange=()=>drawPreview();
 $("selectedDigit").onchange=()=>{selectedDigit=Number($("selectedDigit").value);digitMode="edit";drawPreview();};
 $("deleteDigit").onclick=deleteSelectedDigit;
 $("applyDigitGeometry").onclick=()=>{
@@ -301,6 +303,7 @@ function drawPreview() {
     }
     const digitBounds=current.config.rois.map(roi=>{
       const points=outline(roi);ctx.strokeStyle=$("editGroup").checked?"#ffd46a":"#8ff5bc";ctx.stroke();
+      ctx.save();outline(RoiGeometry.innerFrame(roi));ctx.setLineDash([5,4]);ctx.lineWidth=Math.max(1,canvas.width/700);ctx.strokeStyle="#72c8ff";ctx.stroke();ctx.restore();
       return {left:Math.min(...points.map(p=>p.x))*canvas.width,right:Math.max(...points.map(p=>p.x))*canvas.width,
         top:Math.min(...points.map(p=>p.y))*canvas.height,bottom:Math.max(...points.map(p=>p.y))*canvas.height};
     });
@@ -316,7 +319,13 @@ function drawPreview() {
         ctx.fillStyle="#ffd46a";ctx.fillRect(hx,hy,w,h);ctx.strokeStyle="#1e241f";ctx.strokeRect(hx,hy,w,h);
       }
     }
-    if (startPoint && draftPoint) { ctx.strokeStyle="#ffffff";ctx.setLineDash([5,4]);ctx.strokeRect(startPoint.x*canvas.width,startPoint.y*canvas.height,(draftPoint.x-startPoint.x)*canvas.width,(draftPoint.y-startPoint.y)*canvas.height);ctx.setLineDash([]); }
+    if (startPoint && draftPoint) {
+      ctx.save();ctx.strokeStyle="#ffffff";ctx.setLineDash([5,4]);ctx.strokeRect(startPoint.x*canvas.width,startPoint.y*canvas.height,(draftPoint.x-startPoint.x)*canvas.width,(draftPoint.y-startPoint.y)*canvas.height);ctx.restore();
+      if(digitDrag?.kind==="add"){
+        const drawn=RoiGeometry.fromPoints(startPoint,draftPoint,minimumDigitSize()),outer=drawn && ($("drawDigitFrame").value==="inner"?RoiGeometry.outerFrame(drawn,digitSize()):drawn);
+        if(outer){ctx.save();outline(outer);ctx.strokeStyle="#8ff5bc";ctx.stroke();outline(RoiGeometry.innerFrame(outer));ctx.setLineDash([5,4]);ctx.strokeStyle="#72c8ff";ctx.stroke();ctx.restore();}
+      }
+    }
     // Keep upright number badges outside the entire rotated box, clear of the digit.
     ctx.save();ctx.textBaseline="middle";
     const fontSize=Math.max(15,canvas.width/45),padding=fontSize/3,gap=Math.max(5,ctx.lineWidth*2),placed=[];
@@ -603,9 +612,10 @@ canvas.onpointerup=event=>{
     digitDrag=null;startPoint=null;draftPoint=null;drawPreview();return;
   }
   if(kind==="add") {
-    const roi=RoiGeometry.fromPoints(startPoint,draftPoint,minimumDigitSize());
+    const drawn=RoiGeometry.fromPoints(startPoint,draftPoint,minimumDigitSize());
+    const roi=drawn && ($("drawDigitFrame").value==="inner"?RoiGeometry.outerFrame(drawn,digitSize()):drawn);
     if(roi){current.config.rois.push(roi);selectedDigit=current.config.rois.length-1;}
-    else message("Draw a box at least 9 image pixels wide and high.",true);
+    else message(drawn?"Leave room for the outer 20% margins inside the photo. Move the digit frame inward or draw the outer crop directly.":"Draw a box at least 9 image pixels wide and high.",true);
   }
   digitDrag=null;startPoint=null;draftPoint=null;
   if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);

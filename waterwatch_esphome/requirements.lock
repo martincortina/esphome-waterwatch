@@ -1,5 +1,6 @@
-# Production dependency snapshot resolved on Python 3.12, 2026-10-19.
-# No trained OCR weights are downloaded at runtime. Tesseract is installed by apt.
+# Python 3.12 production snapshot; OCR runtime additions pinned 2026-11-04.
+# The pinned PP-OCR asset is downloaded and verified during the image build only.
+# No trained OCR weights are downloaded at runtime. Tesseract remains available by apt.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
@@ -22,3 +23,7 @@ starlette==1.9.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.54.0
+flatbuffers==25.12.19
+onnxruntime==1.31.1
+packaging==26.3
+protobuf==7.36.2

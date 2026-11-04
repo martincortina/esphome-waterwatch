@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0
+
+- Local PP-OCRv5 English recognition replaces the isolated-character Tesseract
+  baseline. Two row normalizations must agree on each digit; character positions
+  map to their source ROI so missing digits cannot shift the counter.
+- Inner and outer ROI frames show the central 60% digit area and 20% margins.
+  Draw a digit tightly to add its outer frame automatically, or draw the crop directly.
+- Frames rotate together; digit numbers stay outside the outer crop.
+- Character scores remain unchanged and the configured acceptance threshold stays
+  in force. Missing, conflicting and unclear final digits remain rejected.
+- The public English model is pinned by SHA-256, fetched during the container
+  build and runs offline on the HA host. Apache-2.0 notices accompany the model.
+
 ## 0.7.1
 
 - Preview digit numbers sit outside the boxes, including rotated regions, so the

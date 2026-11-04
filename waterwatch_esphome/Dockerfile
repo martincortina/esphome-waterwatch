@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr t
 COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 COPY server ./server
+RUN python -m server.model_assets
 EXPOSE 8099
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/healthz',timeout=3)"

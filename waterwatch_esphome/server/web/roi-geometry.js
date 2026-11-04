@@ -13,6 +13,11 @@ var RoiGeometry = (() => {
     return Object.fromEntries(Object.entries(points).map(([key,p])=>[key,localPoint(roi,p,size)]));
   }
   function corners(roi,size) { const h=handles(roi,size);return [h.nw,h.ne,h.se,h.sw]; }
+  function innerFrame(roi) { return {...roi,x:roi.x+roi.w*.2,y:roi.y+roi.h*.2,w:roi.w*.6,h:roi.h*.6}; }
+  function outerFrame(inner,size) {
+    const w=inner.w/.6,h=inner.h/.6,roi={...inner,x:inner.x+(inner.w-w)/2,y:inner.y+(inner.h-h)/2,w,h};
+    return inside(roi,size)?roi:null;
+  }
   function contains(roi, point, size) { const p=localPoint(roi,point,size,true);return p.x>=roi.x && p.x<=roi.x+roi.w && p.y>=roi.y && p.y<=roi.y+roi.h; }
   function hitTest(rois, point, tolerance, selected=-1, size, rotationPoint=null) {
     if (rois[selected]) {
@@ -103,6 +108,6 @@ var RoiGeometry = (() => {
     });
     return representable && output.every(roi=>inside(roi,after))?output:null;
   }
-  return {handles,corners,localPoint,contains,hitTest,move,resize,fromPoints,rotate,rotationHandle,angleAt,inside,moveGroup,rotateGroup,rotatedSize,reorient};
+  return {handles,corners,innerFrame,outerFrame,localPoint,contains,hitTest,move,resize,fromPoints,rotate,rotationHandle,angleAt,inside,moveGroup,rotateGroup,rotatedSize,reorient};
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = RoiGeometry;

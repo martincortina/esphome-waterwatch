@@ -1,7 +1,7 @@
 # WaterWatch ESPHome OCR
 
 Read a mechanical water meter with an **AI Thinker ESP32-CAM running ESPHome** and
-run OpenCV/Tesseract recognition locally on the **Home Assistant host**.
+run OpenCV/PP-OCRv5 recognition locally on the **Home Assistant host**.
 
 [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fmartincortina%2Fesphome-waterwatch)
 
@@ -43,12 +43,16 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
   Uncertain matches stop processing; large camera movement requires recalibration.
 - Exact test images, per-digit results/quality measurements, group edits, precise
   coordinates and local diagnostic-bundle exports support calibration and validation.
+- Inner/outer digit frames show a central 60% area with 20% margins. Draw around
+  the digit to create its outer crop automatically, including rotated boxes.
+- Local PP-OCRv5 English recognition checks agreement between two row
+  normalizations, with each character mapped to its original digit region.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 
-**Experimental:** this uses host-side Tesseract, not AI-on-the-edge-device's neural
-model. It has no trained analog-pointer or wheel-transition recognizer. Landmark
-alignment and confidence scores do not establish real meter accuracy.
+**Experimental:** this uses a general English text model on the HA host. It has no
+trained analog-pointer or wheel-transition recognizer. Landmark alignment and
+recognition scores do not establish real meter accuracy. Unclear digits stay rejected.
 Test and calibrate your actual meter before enabling publication.
 
 HA access is GET-only by default. Selecting a flash light permits only that entity's
@@ -68,5 +72,6 @@ docker build -t waterwatch-esphome:dev ./waterwatch_esphome
 Tests use synthetic fixtures; native Tesseract and a live MQTT broker are separate
 checks. Run the commands above to validate changes locally.
 
-Application code is MIT licensed. No upstream recognition models or meter photos
-are bundled. See [third-party notices](THIRD_PARTY_NOTICES.md).
+Application code is MIT licensed. Builds download a SHA-256-pinned PP-OCRv5 English
+model under Apache-2.0; it runs without runtime model downloads. No meter photos
+are published. See [third-party notices](THIRD_PARTY_NOTICES.md).

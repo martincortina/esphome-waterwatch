@@ -11,6 +11,7 @@ from PIL import Image
 
 from server.alignment import AlignmentError, register
 from server.models import ROI, MeterConfig
+from server.neural_ocr import NeuralOCREngine, NeuralOCRError
 
 
 @dataclass
@@ -96,6 +97,11 @@ def digit_corners(roi: ROI, width: int, height: int):
     return (offsets * (roi.w * width, roi.h * height)) @ matrix.T + center
 
 
+def inner_frame(roi: ROI):
+    return roi.model_copy(update={"x": roi.x+roi.w*.2, "y": roi.y+roi.h*.2,
+                                  "w": roi.w*.6, "h": roi.h*.6})
+
+
 def crop_digit(image, roi: ROI):
     """Rectify one oriented digit box before image-quality checks and recognition."""
     height, width = image.shape[:2]
@@ -166,7 +172,7 @@ class TesseractEngine:
 
 class Pipeline:
     def __init__(self, engine=None, reference_loader=None):
-        self.engine = engine or TesseractEngine()
+        self.engine = engine or NeuralOCREngine()
         self.reference_loader = reference_loader
 
     def run(self, data: bytes, cfg: MeterConfig) -> Recognition:
@@ -181,6 +187,26 @@ class Pipeline:
         height, width = image.shape[:2]
         if not cfg.rois:
             return Recognition(reason="roi_not_configured", overlay=aligned, aligned=aligned, details=context)
+        row_result = None
+        if callable(getattr(self.engine, "recognize_digits", None)):
+            colors, valid = [], []
+            for index, roi in enumerate(cfg.rois):
+                try:
+                    color = crop_digit(image, roi)
+                except ValueError as error:
+                    return Recognition(reason=str(error), details={**context, "digit": index},
+                                       aligned=aligned, overlay=aligned)
+                gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+                colors.append(color)
+                valid.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()) >= cfg.min_sharpness
+                             and cfg.min_brightness <= float(gray.mean()) <= cfg.max_brightness)
+            if any(valid):
+                try:
+                    row_result = self.engine.recognize_digits(colors, valid)
+                    context.update(row_result.details)
+                except (OSError, NeuralOCRError):
+                    return Recognition(reason="ocr_engine_failure", details=context, aligned=aligned,
+                                       overlay=aligned, crops=[jpeg(color) for color in colors])
         digits, confidences, diagnostics, previews, crops = [], [], [], [], []
         poor_quality = False
         for index, roi in enumerate(cfg.rois):
@@ -202,10 +228,12 @@ class Pipeline:
                                 (["soft_or_blurred"] if sharpness < cfg.min_sharpness else []) +
                                 (["check_highlights"] if np.mean(patch >= 245) > .2 else [])})
             cv2.polylines(overlay, [np.rint(corners).astype(np.int32)], True, (80, 210, 80), 2)
-            x, y = np.rint(corners[0]).astype(int)
+            inner = digit_corners(inner_frame(roi), width, height)
+            cv2.polylines(overlay, [np.rint(inner).astype(np.int32)], True, (255, 200, 114), 1)
+            x, y = np.rint(corners.min(axis=0)).astype(int)
             cv2.putText(
                 overlay,
-                str(index),
+                str(index+1),
                 (x, max(12, y - 3)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
@@ -222,19 +250,22 @@ class Pipeline:
                 poor_quality = True
                 previews.append(cv2.resize(patch, (110, 150)))
                 continue
-            enlarged = cv2.resize(patch, (80, 120), interpolation=cv2.INTER_CUBIC)
-            enhanced = cv2.createCLAHE(clipLimit=2, tileGridSize=(4, 4)).apply(enlarged)
-            threshold = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-            variants = [
-                cv2.copyMakeBorder(p, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
-                for p in (enhanced, threshold)
-            ]
-            previews.append(variants[1])
-            try:
-                results = [self.engine.digit(p) for p in variants]
-            except (OSError, subprocess.SubprocessError):
-                return Recognition(reason="ocr_engine_failure", details={**context, "digits": diagnostics},
-                                   overlay=jpeg(overlay), aligned=aligned, crops=crops)
+            if row_result is not None:
+                results = row_result.results[index]
+            else:
+                enlarged = cv2.resize(patch, (80, 120), interpolation=cv2.INTER_CUBIC)
+                enhanced = cv2.createCLAHE(clipLimit=2, tileGridSize=(4, 4)).apply(enlarged)
+                threshold = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+                variants = [
+                    cv2.copyMakeBorder(p, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
+                    for p in (enhanced, threshold)
+                ]
+                previews.append(variants[1])
+                try:
+                    results = [self.engine.digit(p) for p in variants]
+                except (OSError, subprocess.SubprocessError):
+                    return Recognition(reason="ocr_engine_failure", details={**context, "digits": diagnostics},
+                                       overlay=jpeg(overlay), aligned=aligned, crops=crops)
             diagnostics[-1]["recognitions"] = results
             agreed = results[0][0] is not None and results[0][0] == results[1][0]
             diagnostics[-1]["status"] = ("agreed" if min(r[1] for r in results) >= cfg.min_confidence else "low_confidence") if agreed else "ambiguous"
@@ -256,6 +287,6 @@ class Pipeline:
             details={**context, "digits": diagnostics, "engine": type(self.engine).__name__,
                      "rotation_degrees": cfg.rotation_degrees},
             overlay=jpeg(overlay),
-            processed=jpeg(np.hstack(previews)),
+            processed=jpeg(row_result.processed if row_result is not None else np.hstack(previews)),
             aligned=aligned, crops=crops,
         )

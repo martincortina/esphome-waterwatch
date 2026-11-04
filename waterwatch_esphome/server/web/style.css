@@ -13,4 +13,6 @@
 
 .group-edit{display:flex;align-items:center;gap:5px;font-size:10px;white-space:nowrap}.group-edit input{margin:0}
 
+.roi-frame-tools{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin-top:8px}.roi-frame-tools>label{display:flex;align-items:center;gap:7px;font-size:10px}.roi-frame-tools select{width:auto;max-width:210px;margin:0;min-height:28px;font-size:10px;padding:3px 6px}.roi-frame-legend{display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-size:10px;color:var(--muted)}.roi-frame-legend i{display:inline-block;width:16px;height:11px;margin-left:6px}.outer-frame-key{border:1.5px solid #8ff5bc}.inner-frame-key{border:1.5px dashed #72c8ff}
+
 .precise-digit{margin-top:5px}.precise-digit summary{font-size:10px;color:var(--muted)}.precise-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:5px 0 8px}.precise-grid input{min-height:28px;font-size:11px}.precise-grid label{font-size:10px}.precise-digit button{font-size:10px;min-height:28px}@media(max-width:760px){.precise-grid{grid-template-columns:1fr 1fr}}

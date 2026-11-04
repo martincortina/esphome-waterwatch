@@ -17,7 +17,9 @@ The local-ZIP method below is an alternative for manual installations.
 3. After separate authorization to install, place the entire generated
    `waterwatch_esphome` directory in Home Assistant's `/local_apps` folder
    (`/addons` on older installations), reload the store, install, start and open its Web UI.
-   Build on amd64/aarch64 with internet access for Python packages and Tesseract.
+   Build on amd64/aarch64 with internet access for Python packages and the pinned
+   PP-OCRv5 English model. Weights are SHA-256-verified at build time; recognition
+   runs offline on the HA host, without model downloads at startup.
    The template folder in this source repository alone is not a complete build context;
    use the generated package, which includes the server and dependency lock.
 
@@ -41,6 +43,19 @@ The local-ZIP method below is an alternative for manual installations.
    places, and save. Test camera OCR without writing readings. Try a range of real
    lighting conditions and partially rotated wheels. Never lower thresholds merely
    to make ambiguous images pass.
+
+   In version 0.8.0 each digit has two frames: the solid outer rectangle is its
+   recognition crop; the dashed inner rectangle covers the central 60%, with 20%
+   margins above, below, left and right. Fit the complete glyph inside the inner
+   frame. **Draw around → Digit** adds the outer margins automatically; **Outer
+   crop directly** gives control over the full crop. Existing saved crops keep
+   their positions. Frames move and rotate together, with numbers outside.
+
+   The local English neural recognizer reads two normalized digit rows and checks
+   each character against its source region. A missing character cannot shift
+   later digits. Conflicting digits remain `?`, and low-score agreements remain
+   below the configured threshold. This is a general text model; verify your
+   meter over multiple captures before enabling automatic readings.
 6. Record the first camera image if you want a persistent calibration preview. It is
    stored even before a baseline, with a rejection reason. Verify the physical counter
    and enter a manual baseline with a clear reason. Enable scheduled readings only

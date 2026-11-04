@@ -8,6 +8,23 @@ const roi = {x:.2,y:.3,w:.25,h:.4};
 const minimum = {w:.02,h:.04};
 const close = (actual, expected) => assert.ok(Math.abs(actual-expected)<1e-10, `${actual} != ${expected}`);
 
+test('inner guides have 20 percent margins and preserve rotated pixel geometry',()=>{
+  const outer={x:.3,y:.3,w:.2,h:.3,rotation_degrees:27},size={width:800,height:600};
+  const inner=geometry.innerFrame(outer);
+  close(inner.w/outer.w,.6);close(inner.h/outer.h,.6);
+  close(inner.x+inner.w/2,outer.x+outer.w/2);close(inner.y+inner.h/2,outer.y+outer.h/2);
+  const a=geometry.corners(outer,size),b=geometry.corners(inner,size);
+  a.forEach((p,i)=>{close(b[i].x-(outer.x+outer.w/2),.6*(p.x-outer.x-outer.w/2));close(b[i].y-(outer.y+outer.h/2),.6*(p.y-outer.y-outer.h/2));});
+  const restored=geometry.outerFrame(inner,size);
+  for(const key of ['x','y','w','h','rotation_degrees'])close(restored[key],outer[key]);
+});
+
+test('adding outer margins rejects image-edge overflow without shifting the digit',()=>{
+  const inner={x:0,y:.3,w:.1,h:.2};
+  assert.equal(geometry.outerFrame(inner,{width:800,height:600}),null);
+  assert.deepEqual(inner,{x:0,y:.3,w:.1,h:.2});
+});
+
 test('moving preserves size and stays inside image at every boundary', () => {
   const moved = geometry.move(roi,-5,8);
   assert.deepEqual(moved,{x:0,y:.6,w:.25,h:.4});
