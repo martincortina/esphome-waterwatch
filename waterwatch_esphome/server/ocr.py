@@ -269,6 +269,9 @@ class Pipeline:
                     return Recognition(reason="ocr_engine_failure", details={**context, "digits": diagnostics},
                                        overlay=jpeg(overlay), aligned=aligned, crops=crops)
             diagnostics[-1]["recognitions"] = results
+            evidence = context.get("recognition_evidence", [])
+            if index < len(evidence):
+                diagnostics[-1].update(evidence[index])
             choices = {r[0] for r in results if r[0] is not None and r[1] >= .5}
             if len(choices) == 2 and all(len(c) == 1 and c in "0123456789" for c in choices):
                 for first in sorted(choices):

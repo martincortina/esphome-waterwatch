@@ -38,3 +38,11 @@ startup. The upstream Apache-2.0 text is included at
 `server/licenses/paddleocr-apache-2.0.txt`. Digit-row normalization, two-pass agreement
 and cell mapping are WaterWatch application code. The BGR scaling and CTC model
 interface follow the public PaddleOCR/RapidOCR conventions.
+
+
+The v0.10.0 assistance model, `latin_PP-OCRv5_rec_mobile.onnx` (RapidAI/RapidOCR
+v3.10.0 catalog, PP-OCRv5 Latin mobile recognition), uses the same Apache-2.0
+PaddleOCR license. Build-time download SHA-256:
+`b20bd37c168a570f583afbc8cd7925603890efbcdc000a59e22c269d160b5f5a`.
+This adds a public generic text model; no private training images or meter-specific
+reading labels are distributed.

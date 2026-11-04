@@ -585,7 +585,8 @@ async function renderResult(result, testOnly) {
     const title=document.createElement("strong");title.textContent=`Digit ${digit.digit+1} · ${digit.used_for_reading===false?"Excluded at chosen precision":readable(digit.status||"quality check")}`;card.append(title);
     if(digit.possible_transition){const note=document.createElement("p");note.textContent=`Possible wheel transition ${digit.possible_transition.join(" → ")}. No digit inferred.`;card.append(note);}
     if(images?.digits?.[digit.digit])card.append(diagnosticImage(images.digits[digit.digit],`Actual crop for digit ${digit.digit+1}`));
-    for(const [index,recognition] of (digit.recognitions||[]).entries()){const line=document.createElement("p");line.textContent=`Pass ${index+1}: ${recognition[0]??"?"} · ${(recognition[1]*100).toFixed(1)}%`;card.append(line);}
+    for(const [index,recognition] of (digit.recognitions||[]).entries()){const line=document.createElement("p");line.textContent=`${digit.recognition_sources?.[index]||`Pass ${index+1}`}: ${recognition[0]??"?"} · ${(recognition[1]*100).toFixed(1)}%`;card.append(line);}
+    if(digit.recognition_policy==="assisted_consensus"){const note=document.createElement("p");note.textContent="Supported by two normalized Latin-model views";card.append(note);}
     const quality=document.createElement("p");quality.textContent=`Brightness ${Math.round(digit.brightness)} · Highlights ${Math.round((digit.highlight_fraction||0)*100)}%`;card.append(quality);
     if(digit.quality_warnings?.length){const note=document.createElement("p");note.textContent=digit.quality_warnings.map(readable).join(" · ");card.append(note);}
     $("digitResults").append(card);

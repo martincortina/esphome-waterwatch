@@ -1,7 +1,7 @@
 # WaterWatch ESPHome OCR
 
 Read a mechanical water meter with an **AI Thinker ESP32-CAM running ESPHome** and
-run OpenCV/PP-OCRv5 recognition locally on the **Home Assistant host**.
+run OpenCV/PP-OCRv5 English and Latin recognition locally on the **Home Assistant host**.
 
 [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fmartincortina%2Fesphome-waterwatch)
 
@@ -12,7 +12,7 @@ measurement of real-meter OCR accuracy.*
 
 ## Install
 
-1. In Home Assistant, open **Settings â†’ Apps/Add-ons â†’ Store â†’ â‹® â†’ Repositories**.
+1. In Home Assistant, open **Settings → Apps/Add-ons → Store → â‹® → Repositories**.
 2. Add `https://github.com/martincortina/esphome-waterwatch`.
 3. Install **WaterWatch ESPHome OCR**, keep `publish_to_mqtt: false`, then start it
    and select **Open Web UI**. The first installation builds its container locally.
@@ -50,8 +50,9 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
   attached captures; previous Home Assistant statistics remain unchanged.
 - Optional lower decimal precision keeps a rolling final wheel visible while
   excluding its uncertain digit from consumption readings.
-- Local PP-OCRv5 English recognition checks agreement between two row
-  normalizations, with each character mapped to its original digit region.
+- Local PP-OCRv5 English and Latin models compare colour-normalized counter views,
+  with each character mapped to its original digit region. Two assisting views must
+  agree; conflicting model evidence stays rejected.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 

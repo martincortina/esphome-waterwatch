@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0
+
+- Add a pinned local PP-OCRv5 Latin model with five normalized counter views.
+  Two agreeing views can support a weak or missing English-model prediction.
+- Keep original model scores and the configured confidence threshold. Conflicting
+  numeric views and strong model contradictions remain rejected.
+- Display the actual model/view supporting each digit and retain all raw evidence
+  in diagnostic exports. Wider vertical context and colour normalization help
+  distinguish narrow meter digits from reflections and red-wheel backgrounds.
+- Correct the deletion dialog background to follow the selected theme.
+
 ## 0.9.0
 
 - Edit, resize, redraw or delete alignment landmarks on the saved reference image.

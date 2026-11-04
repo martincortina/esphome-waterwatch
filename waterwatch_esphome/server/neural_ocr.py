@@ -19,6 +19,17 @@ MODEL_URL = (
     "onnx/PP-OCRv5/rec/en_PP-OCRv5_rec_mobile.onnx"
 )
 MODEL_DIRECTORY = Path(__file__).parent / "ocr_models"
+ASSIST_MODEL_NAME = "latin_PP-OCRv5_rec_mobile.onnx"
+ASSIST_MODEL_SHA256 = "b20bd37c168a570f583afbc8cd7925603890efbcdc000a59e22c269d160b5f5a"
+ASSIST_MODEL_URL = (
+    "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/"
+    "onnx/PP-OCRv5/rec/latin_PP-OCRv5_rec_mobile.onnx"
+)
+ASSIST_VIEWS = (("neutral contrast", "neutral", 1.2, .6, .85, False),
+                ("green contrast", "green", 1.2, .6, .85, False),
+                ("luma contrast", "luma", 1.0, .6, .85, False),
+                ("wider neutral contrast", "neutral", 1.2, .8, .85, False),
+                ("full-window binary", "luma", 1.4, .6, 1.0, True))
 
 
 class NeuralOCRError(RuntimeError):
@@ -32,14 +43,28 @@ class RowRecognition:
     details: dict
 
 
-def counter_strip(patches, stretch, valid=None):
+def counter_strip(patches, stretch, valid=None, normalization=None, width_fraction=.6,
+                  height_fraction=.85, binary=False):
     """Take each outer ROI's central 60%, then keep separate known digit cells."""
     if not 1 <= len(patches) <= 12 or valid is not None and len(valid) != len(patches):
         raise NeuralOCRError("Invalid digit-cell count")
     cells, columns, x = [], [], 0
     for index, patch in enumerate(patches):
         height, width = patch.shape[:2]
-        inner = patch[round(height*.2):round(height*.8), round(width*.2):round(width*.8)]
+        if normalization:
+            top, left = math.floor(height*(1-height_fraction)/2+.5), round(width*(1-width_fraction)/2)
+            inner = patch[top:height-top, left:width-left]
+            if min(inner.shape[:2]) < 2:
+                raise NeuralOCRError("Digit inner frame is too small")
+            gray = (inner.min(axis=2) if normalization == "neutral" else inner[:, :, 1]
+                    if normalization == "green" else cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY))
+            low, high = np.percentile(gray, (2, 98))
+            gray = np.clip((gray.astype(np.float64)-low)*255/max(1, high-low), 0, 255).astype(np.uint8)
+            if binary:
+                gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+            inner = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        else:
+            inner = patch[round(height*.2):round(height*.8), round(width*.2):round(width*.8)]
         if min(inner.shape[:2]) < 2:
             raise NeuralOCRError("Digit inner frame is too small")
         cell_width = max(1, round(inner.shape[1]*80/inner.shape[0]*stretch))
@@ -108,22 +133,53 @@ def decode_cells(probabilities, characters, columns, image_width, resized_width,
     return result, "".join(text)
 
 
+def select_evidence(primary, assisted):
+    """Choose a genuine two-view consensus, retaining the unmodified model scores."""
+    digit = primary[0][0] if primary[0][0] is not None and primary[0][0] == primary[1][0] else None
+    # A conflicting raw numeric pair can represent a rolling wheel, even at low scores.
+    raw_conflict = (primary[0][0] is not None and primary[1][0] is not None
+                    and primary[0][0] != primary[1][0] and min(p[1] for p in primary) >= .25)
+    votes = {}
+    for index, (value, score) in enumerate(assisted):
+        if value is not None and score >= .5:
+            votes.setdefault(value, []).append((score, index))
+    candidates = [(value, sorted(support, reverse=True)[:2])
+                  for value, support in votes.items() if len(support) >= 2]
+    if raw_conflict:
+        return [(None, 0.0), (None, 0.0)], ["conflicting raw views"]*2, "raw_numeric_conflict"
+    if len(candidates) > 1:
+        return [(None, 0.0), (None, 0.0)], ["ambiguous assistance"]*2, "model_conflict"
+    if len(candidates) == 1:
+        value, support = candidates[0]
+        # Strong contradictory evidence from either model always stops promotion.
+        conflict = any(other is not None and other != value and score >= .85
+                       for other, score in [*primary, *assisted])
+        if conflict or digit is not None and digit != value:
+            return [(None, 0.0), (None, 0.0)], ["model conflict"]*2, "model_conflict"
+        selected = [(value, score) for score, index in support]
+        if digit is None or min(s for d, s in selected) > min(s for d, s in primary):
+            return selected, ["Latin · "+ASSIST_VIEWS[index][0] for score, index in support], "assisted_consensus"
+    return primary, ["English · wide row", "English · wider row"], "primary_views"
+
+
 class NeuralOCREngine:
     """One local CPU model; unmodified character scores from two normalizations."""
     def __init__(self, model_dir=None):
         self.path = Path(model_dir or MODEL_DIRECTORY) / MODEL_NAME
+        self.assist_path = Path(model_dir or MODEL_DIRECTORY) / ASSIST_MODEL_NAME
         self._session = None
         self._load_lock = threading.Lock()
 
     @property
     def available(self):
-        return self.path.is_file()
+        return self.path.is_file() and self.assist_path.is_file()
 
     def _load(self):
         with self._load_lock:
             if self._session is not None:
                 return
-            if not self.available or hashlib.sha256(self.path.read_bytes()).hexdigest() != MODEL_SHA256:
+            if (not self.available or hashlib.sha256(self.path.read_bytes()).hexdigest() != MODEL_SHA256
+                    or hashlib.sha256(self.assist_path.read_bytes()).hexdigest() != ASSIST_MODEL_SHA256):
                 raise NeuralOCRError("Pinned OCR model is missing or changed; rebuild the application")
             try:
                 import onnxruntime as ort
@@ -136,6 +192,11 @@ class NeuralOCREngine:
                 alphabet = session.get_modelmeta().custom_metadata_map["character"].splitlines()
                 self.characters = ["", *alphabet, " "]
                 self.input_name = session.get_inputs()[0].name
+                assist = ort.InferenceSession(str(self.assist_path), sess_options=options,
+                                             providers=["CPUExecutionProvider"])
+                self.assist_characters = ["", *assist.get_modelmeta().custom_metadata_map["character"].splitlines(), " "]
+                self.assist_input_name = assist.get_inputs()[0].name
+                self._assist_session = assist
                 self._session = session
             except Exception as error:
                 raise NeuralOCRError("Cannot initialize the local OCR model") from error
@@ -157,10 +218,34 @@ class NeuralOCREngine:
             passes.append(digits)
             rows.append(row)
             texts.append(text)
+        assisted, assist_texts = [], []
+        for _name, normalization, stretch, width_fraction, height_fraction, binary in ASSIST_VIEWS:
+            row, columns = counter_strip(patches, stretch, valid, normalization,
+                                        width_fraction, height_fraction, binary)
+            tensor, resized_width, padded_width = model_input(row)
+            try:
+                probabilities = self._assist_session.run(None, {self.assist_input_name: tensor})[0]
+            except Exception as error:
+                raise NeuralOCRError("Local assistance inference failed") from error
+            values, text = decode_cells(probabilities, self.assist_characters, columns,
+                                        row.shape[1], resized_width, padded_width)
+            assisted.append(values)
+            assist_texts.append(text)
+        results, evidence = [], []
+        for index, primary in enumerate(zip(*passes, strict=True)):
+            choices = [view[index] for view in assisted]
+            selected, sources, policy = select_evidence(list(primary), choices)
+            if valid is not None and not valid[index]:
+                selected = [(None, 0.0), (None, 0.0)]
+            results.append(selected)
+            evidence.append({"recognition_sources": sources, "recognition_policy": policy,
+                             "primary_recognitions": list(primary), "assist_recognitions": choices})
         return RowRecognition(
-            results=[list(pair) for pair in zip(*passes, strict=True)],
+            results=results,
             processed=rows[0],
-            details={"model": "PP-OCRv5 English mobile", "model_sha256": MODEL_SHA256,
+            details={"model": "PP-OCRv5 English + Latin mobile", "model_sha256": MODEL_SHA256,
+                     "assist_model_sha256": ASSIST_MODEL_SHA256, "assist_row_texts": assist_texts,
+                     "recognition_evidence": evidence,
                      "recognition_passes": ["wide row", "wider row"],
                      "row_texts": texts, "roi_inner_fraction": .6},
         )

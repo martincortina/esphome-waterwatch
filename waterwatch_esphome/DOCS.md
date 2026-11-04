@@ -33,7 +33,7 @@ The local-ZIP method below is an alternative for manual installations.
 
    The resulting `/local_apps/waterwatch_esphome/config.yaml` must be directly in
    the app folder, with `Dockerfile`, `requirements.lock` and `server/` beside it.
-   In Settings â†’ Apps (or Add-ons) â†’ Store, choose â‹® â†’ Check for updates, then
+   In Settings → Apps (or Add-ons) → Store, choose â‹® → Check for updates, then
    select **WaterWatch ESPHome OCR** under Local apps and install it. Keep
    `publish_to_mqtt: false`, start it, and open Web UI.
 4. Keep `publish_to_mqtt: false`. Register a meter with a stable ID such as
@@ -47,7 +47,7 @@ The local-ZIP method below is an alternative for manual installations.
    In version 0.8.0 each digit has two frames: the solid outer rectangle is its
    recognition crop; the dashed inner rectangle covers the central 60%, with 20%
    margins above, below, left and right. Fit the complete glyph inside the inner
-   frame. **Draw around â†’ Digit** adds the outer margins automatically; **Outer
+   frame. **Draw around → Digit** adds the outer margins automatically; **Outer
    crop directly** gives control over the full crop. Existing saved crops keep
    their positions. Frames move and rotate together, with numbers outside.
 
@@ -114,7 +114,7 @@ The local-ZIP method below is an alternative for manual installations.
   **Add digit** draws another box in reading order (up to 12). Editing a box keeps
   its number. Handles stay usable when zoomed; boxes remain inside the image.
 - To tilt only one digit box, select it in **Edit digits**, then drag its round
-  rotation handle or use **Digit rotation â†’ Angle**, quarter turns or Reset digit
+  rotation handle or use **Digit rotation → Angle**, quarter turns or Reset digit
   angle. Positive angles turn the box clockwise; the host OCR rectifies this box
   to an upright crop. The image's overall rotation and other digit boxes stay fixed.
   A box near an edge may shift just enough to fit; resize it first if the requested
@@ -147,7 +147,7 @@ The local-ZIP method below is an alternative for manual installations.
   performed by this export. Tests otherwise remain only in browser memory.
 
 Perspective points remain in the original source-image coordinates. Processing order
-is source image â†’ perspective correction (if configured) â†’ rotation â†’ optional landmark alignment â†’ digit regions.
+is source image → perspective correction (if configured) → rotation → optional landmark alignment → digit regions.
 Each region may have its own `rotation_degrees` in [-180, 180], defaulting to 0
 for older configurations. Its x/y/w/h describe the unrotated rectangle; it rotates
 about its centre in aligned-image pixel coordinates. OCR maps the oriented region
@@ -277,3 +277,17 @@ its OCR/quality diagnostics remain visible; its value is excluded, never filled 
 or rounded. Exclude only decimal wheels. Defaults remain zero excluded wheels.
 Existing verified totals stay unchanged; if reduced precision falls below a previous
 more precise total, monotonic validation waits until the counter catches up.
+
+
+## Recognition stability (0.10.0)
+
+The host includes pinned English and Latin PP-OCRv5 models. Narrow meter glyphs
+and a horizontal reflection can make the English model see a letter instead of a
+digit. Five colour/contrast/context Latin views provide additional evidence;
+two must agree before assisting a weak or missing English result. Model conflicts
+remain rejected. Per-digit cards name the two actual supporting views. Complete
+original and assistance predictions remain in the test details and bundle export.
+Scores are unmodified model outputs, not calibrated probabilities. Confidence,
+quality, baseline and flow thresholds still apply. A hundred successful test frames
+qualify that reading and capture setup, not every future wheel position or lighting
+condition. Full-precision ambiguous transitions are still unresolved.

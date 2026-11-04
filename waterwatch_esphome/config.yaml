@@ -1,5 +1,5 @@
 name: WaterWatch ESPHome OCR
-version: "0.9.0"
+version: "0.10.0"
 slug: waterwatch_esphome
 description: Local optical water meter OCR using an ESPHome camera
 arch:
