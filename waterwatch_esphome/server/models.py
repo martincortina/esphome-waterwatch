@@ -112,6 +112,7 @@ class MeterConfig(StrictModel):
     mode: Literal["Docker", "ESP32", "Auto"] = "Docker"
     rois: list[ROI] = Field(default_factory=list, max_length=12)
     decimal_places: int = Field(default=3, ge=0, le=6)
+    ignored_decimal_digits: int = Field(default=0, ge=0, le=6)
     min_confidence: float = Field(default=0.85, ge=0.5, le=1)
     min_sharpness: float = Field(default=20, ge=0, le=10000)
     min_brightness: float = Field(default=20, ge=0, le=255)
@@ -134,6 +135,8 @@ class MeterConfig(StrictModel):
 
     @model_validator(mode="after")
     def layout(self):
+        if self.ignored_decimal_digits > self.decimal_places:
+            raise ValueError("Only decimal digits can be excluded from the reading")
         if self.rois and self.decimal_places >= len(self.rois):
             raise ValueError("Need at least one integer digit ROI")
         if self.min_brightness >= self.max_brightness:
@@ -165,3 +168,22 @@ class ManualReading(StrictModel):
     def value(cls, value):
         micro_m3(value)
         return value
+
+
+class LogSelection(StrictModel):
+    scope: Literal["selected", "rejected", "all"]
+    sequences: list[int] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def valid_selection(self):
+        if any(seq <= 0 for seq in self.sequences) or len(set(self.sequences)) != len(self.sequences):
+            raise ValueError("Use unique positive reading numbers")
+        if (self.scope == "selected") != bool(self.sequences):
+            raise ValueError("Select reading numbers only for a selected-row deletion")
+        return self
+
+
+class LogDeletion(LogSelection):
+    confirm: Literal["DELETE"]
+    through_seq: int = Field(gt=0)
+    expected_count: int = Field(gt=0)

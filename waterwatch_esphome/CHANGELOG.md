@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0
+
+- Edit, resize, redraw or delete alignment landmarks on the saved reference image.
+  Landmark edits support Undo/Redo and precise coordinates. Deleting a landmark
+  keeps alignment disabled until two valid landmarks are restored.
+- Delete individual, selected, rejected or all reading logs after reviewing a
+  confirmation. Capture photos are removed. A minimal verified-counter checkpoint
+  preserves validation and consumption continuity; deleted upload IDs stay deduplicated.
+- Optionally exclude the smallest decimal wheels without deleting their ROI boxes.
+  Uncertain wheel transitions remain rejected at full precision. Excluded wheels
+  cannot lower the confidence or quality of the digits still used in the reading.
+
 ## 0.8.0
 
 - Local PP-OCRv5 English recognition replaces the isolated-character Tesseract

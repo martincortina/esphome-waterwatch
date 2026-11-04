@@ -33,7 +33,7 @@ The local-ZIP method below is an alternative for manual installations.
 
    The resulting `/local_apps/waterwatch_esphome/config.yaml` must be directly in
    the app folder, with `Dockerfile`, `requirements.lock` and `server/` beside it.
-   In Settings → Apps (or Add-ons) → Store, choose ⋮ → Check for updates, then
+   In Settings â†’ Apps (or Add-ons) â†’ Store, choose â‹® â†’ Check for updates, then
    select **WaterWatch ESPHome OCR** under Local apps and install it. Keep
    `publish_to_mqtt: false`, start it, and open Web UI.
 4. Keep `publish_to_mqtt: false`. Register a meter with a stable ID such as
@@ -47,7 +47,7 @@ The local-ZIP method below is an alternative for manual installations.
    In version 0.8.0 each digit has two frames: the solid outer rectangle is its
    recognition crop; the dashed inner rectangle covers the central 60%, with 20%
    margins above, below, left and right. Fit the complete glyph inside the inner
-   frame. **Draw around → Digit** adds the outer margins automatically; **Outer
+   frame. **Draw around â†’ Digit** adds the outer margins automatically; **Outer
    crop directly** gives control over the full crop. Existing saved crops keep
    their positions. Frames move and rotate together, with numbers outside.
 
@@ -66,7 +66,7 @@ The local-ZIP method below is an alternative for manual installations.
    If no service is available, publication-enabled startup fails with a safe diagnostic.
    This initial profile expects the normal internal, non-TLS MQTT service. External or
    private-CA brokers should use the existing standalone Docker deployment instead.
-8. MQTT discovery creates a cumulative water sensor (`m³`, `water`,
+8. MQTT discovery creates a cumulative water sensor (`mÂ³`, `water`,
    `total_increasing`), flow and diagnostics. Select the total in HA's water dashboard
    and optionally adapt the repository's utility-meter example. These are new
    `waterwatch_*` IDs; the old `watermeter_*` entities are not reused or overwritten.
@@ -97,8 +97,8 @@ The local-ZIP method below is an alternative for manual installations.
   mobile. Advanced settings and uploaded images are collapsed by default.
 - Draw one region per digit, left to right. Zoom in for detail, undo the last region,
   or clear regions. A draft outline follows your pointer while drawing.
-- Use **↶ 90° / ↷ 90°** below the image for quarter turns, or **Angle / the
-  straightening slider** for a precise angle from -180° to 180° (positive is
+- Use **â†¶ 90Â° / â†· 90Â°** below the image for quarter turns, or **Angle / the
+  straightening slider** for a precise angle from -180Â° to 180Â° (positive is
   clockwise). Rotate until the digits are horizontal, then draw their regions and
   save. The angle is stored per meter and applies to both preview and host OCR.
   Existing digit boxes are transformed with the photo. If a box cannot fit, the
@@ -114,7 +114,7 @@ The local-ZIP method below is an alternative for manual installations.
   **Add digit** draws another box in reading order (up to 12). Editing a box keeps
   its number. Handles stay usable when zoomed; boxes remain inside the image.
 - To tilt only one digit box, select it in **Edit digits**, then drag its round
-  rotation handle or use **Digit rotation → Angle**, quarter turns or Reset digit
+  rotation handle or use **Digit rotation â†’ Angle**, quarter turns or Reset digit
   angle. Positive angles turn the box clockwise; the host OCR rectifies this box
   to an upright crop. The image's overall rotation and other digit boxes stay fixed.
   A box near an edge may shift just enough to fit; resize it first if the requested
@@ -125,7 +125,7 @@ The local-ZIP method below is an alternative for manual installations.
   Shift moves by ten. Alt + arrows resize its right/bottom edges. Delete removes the
   selection, Ctrl/Cmd + Z undoes, Ctrl/Cmd + Shift + Z redoes, and Escape cancels a
   drag or clears selection. The editor keeps up to 50 undo steps during the session.
-  The [ / ] keys rotate the selected box by 1° (Shift: 10°).
+  The [ / ] keys rotate the selected box by 1Â° (Shift: 10Â°).
   Changing meter, applying JSON, discarding changes or rotating resets this history.
 - The save bar shows unsaved changes. **Save & preview** and **Save & test OCR** save
   the edited configuration before that action. **Discard changes** restores the last
@@ -147,7 +147,7 @@ The local-ZIP method below is an alternative for manual installations.
   performed by this export. Tests otherwise remain only in browser memory.
 
 Perspective points remain in the original source-image coordinates. Processing order
-is source image → perspective correction (if configured) → rotation → optional landmark alignment → digit regions.
+is source image â†’ perspective correction (if configured) â†’ rotation â†’ optional landmark alignment â†’ digit regions.
 Each region may have its own `rotation_degrees` in [-180, 180], defaulting to 0
 for older configurations. Its x/y/w/h describe the unrotated rectangle; it rotates
 about its centre in aligned-image pixel coordinates. OCR maps the oriented region
@@ -155,7 +155,7 @@ to an upright crop before quality checks. Rotated corners must remain in the ima
 an invalid imported region returns `roi_outside_image` rather than reading it.
 The preview uses the same server transform as OCR. Quarter turns preserve pixels;
 fine-angle rotation expands the canvas with white borders so the image is not cropped.
-Old configurations default to 0°. Stored source images and historic readings remain
+Old configurations default to 0Â°. Stored source images and historic readings remain
 unchanged. Arbitrary-angle output is limited to 10 megapixels to bound memory use.
 
 ## Automatic alignment
@@ -169,7 +169,7 @@ unchanged. Arbitrary-angle output is limited to 10 megapixels to bound memory us
    The image scrolls into view; Escape cancels landmark drawing.
 4. Enable **Align each photo automatically**, save and test. Check both match scores
    and all digit crops. The default search margin is 12%, score threshold 0.85 and
-   maximum rotation 8°. These are rejection limits, not a guarantee every movement
+   maximum rotation 8Â°. These are rejection limits, not a guarantee every movement
    inside them will match. Similar alternative matches and scale changes over 2.5%
    also stop recognition. A digit mapped outside the source photo is rejected.
 5. Large movement, changed focus/resolution, reference orientation or perspective
@@ -182,18 +182,16 @@ are meter-specific. The last five references plus any older active reference are
 retained. HA add-on backups contain them; configuration JSON alone does not contain
 reference photographs. Alignment is disabled by default on existing meters.
 
-The recognition engine is still Tesseract. Meter-trained models, rolling-wheel/carry
-interpretation, analog pointers, an in-app labelled training gallery and measured
-real-meter model validation are subsequent work. Exported test bundles prepare data
-for that work without claiming that a neural recognizer is installed.
+The host recognizer uses the pinned PP-OCRv5 English model. Meter-trained continuous
+wheel/carry interpretation, analog pointers, a labelled training gallery and held-out
+real-meter validation remain subsequent work.
 
 ## Recognition boundaries
 
-This is a host-side OpenCV/Tesseract baseline, not the reference project's trained
-neural recognizer. It supports a fixed digital wheel layout with per-digit boxes and
+This is host-side OpenCV/PP-OCRv5 recognition with a general English model. It supports a fixed digital wheel layout with per-digit boxes and
 optional static perspective correction. It has no trained analog-pointer reader,
 reliable half-rolled wheel interpretation. Optional landmark alignment only compensates
-small rigid camera movements; it does not guarantee recognition accuracy. Tesseract
+small rigid camera movements; it does not guarantee recognition accuracy. Recognition
 scores and two-pass agreement do not establish real meter accuracy.
 
 Unreadable, low-score, implausible, delayed and out-of-order candidates do not replace
@@ -245,3 +243,37 @@ This is a brief LED illumination period, not a synchronized photographic strobe.
 Adjust brightness/diffusion to avoid reflections. Three image requests per capture
 flush queued frames; HA still provides no trusted exposure timestamp. The image and
 OCR checks remain necessary. No readings are published merely by enabling flash.
+
+
+## Landmark editing, log deletion and rolling wheels (0.9.0)
+
+Open **Automatic alignment → Edit landmarks on reference**. When alignment is
+active, **Pause & edit landmarks** disables and saves it before editing. Select a
+blue landmark and drag it or its handles, use the percentage fields, or choose
+**Redraw**. **Delete landmark** removes it; remaining landmarks are renumbered.
+Undo/Redo works for these edits. Two fixed, distinctive landmarks must remain
+inside the image, below 10% of its area each and at least 15% apart. Enable and save
+alignment again after completing the edit. Digit boxes are preserved.
+
+In **History**, delete one row, select multiple rows, delete rejected readings, or
+clear the log. Review the count and confirm **Delete permanently**. The deletion
+is meter-specific and includes associated capture photos; new records arriving after
+the review are kept. Logs are removed from the local database and export. The current
+verified counter, its validation timestamp and minimal event/image fingerprints are
+retained separately to prevent a counter reset, replayed upload or frozen camera
+from corrupting consumption. Home Assistant statistics and exported copies are not
+removed. This does not erase the entire add-on data directory or backups.
+
+A mechanical wheel can stop between two values. The text recognizer does not
+measure its fractional rotation or reconstruct carries. Full precision keeps such
+uncertain readings rejected. Where two sufficiently scored passes disagree on
+adjacent digits, diagnostics show a **possible wheel transition**, without choosing
+one. This is advisory and cannot detect every transition.
+
+To keep reliable larger readings, set **Exclude smallest decimal wheels** in
+**Digit recognition**. For eight ROIs and three decimal places, excluding one gives
+seven used digits, two decimal places and 10-litre resolution. The eighth ROI and
+its OCR/quality diagnostics remain visible; its value is excluded, never filled in
+or rounded. Exclude only decimal wheels. Defaults remain zero excluded wheels.
+Existing verified totals stay unchanged; if reduced precision falls below a previous
+more precise total, monotonic validation waits until the counter catches up.

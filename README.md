@@ -12,7 +12,7 @@ measurement of real-meter OCR accuracy.*
 
 ## Install
 
-1. In Home Assistant, open **Settings → Apps/Add-ons → Store → ⋮ → Repositories**.
+1. In Home Assistant, open **Settings â†’ Apps/Add-ons â†’ Store â†’ â‹® â†’ Repositories**.
 2. Add `https://github.com/martincortina/esphome-waterwatch`.
 3. Install **WaterWatch ESPHome OCR**, keep `publish_to_mqtt: false`, then start it
    and select **Open Web UI**. The first installation builds its container locally.
@@ -45,6 +45,11 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
   coordinates and local diagnostic-bundle exports support calibration and validation.
 - Inner/outer digit frames show a central 60% area with 20% margins. Draw around
   the digit to create its outer crop automatically, including rotated boxes.
+- Editable/removable alignment landmarks with Undo/Redo and numeric positioning.
+- Confirmed reading-log deletion retains the current verified counter and removes
+  attached captures; previous Home Assistant statistics remain unchanged.
+- Optional lower decimal precision keeps a rolling final wheel visible while
+  excluding its uncertain digit from consumption readings.
 - Local PP-OCRv5 English recognition checks agreement between two row
   normalizations, with each character mapped to its original digit region.
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
@@ -64,7 +69,7 @@ or privileged device access are requested. Supervisor credentials remain in memo
 ```sh
 python -m pip install -r requirements-dev.lock
 python -m pytest -q
-node --test tests/roi_geometry.test.cjs tests/test_bundle.test.cjs
+node --test tests/*.test.cjs
 python -m ruff check waterwatch_esphome/server tests
 docker build -t waterwatch-esphome:dev ./waterwatch_esphome
 ```

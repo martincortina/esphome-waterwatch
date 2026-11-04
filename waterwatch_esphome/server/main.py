@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from server.config import Settings
 from server.home_assistant import CameraCollector, CameraError, HomeAssistantCamera
-from server.models import ManualReading, MeterConfig
+from server.models import LogDeletion, LogSelection, ManualReading, MeterConfig
 from server.mqtt import MqttBridge
 from server.ocr import jpeg
 from server.service import Service, public_reading, token_hash
@@ -80,7 +80,7 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
 
     app = FastAPI(
         title="WaterWatch",
-        version="0.8.0",
+        version="0.9.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -331,6 +331,22 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
             return service.manual(meter_id, correction)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
+
+    @app.post("/api/meters/{meter_id}/history/delete-preview", dependencies=[Depends(admin)])
+    def delete_preview(meter_id: str, selection: LogSelection):
+        config(meter_id)
+        try:
+            return service.log_delete_preview(meter_id, selection)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/meters/{meter_id}/history/delete", dependencies=[Depends(admin)])
+    def delete_history(meter_id: str, selection: LogDeletion):
+        config(meter_id)
+        try:
+            return service.delete_logs(meter_id, selection)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.get("/api/meters/{meter_id}/images/{event_id}/{variant}", dependencies=[Depends(admin)])
     def image(meter_id: str, event_id: str, variant: Literal["original", "overlay", "processed"]):

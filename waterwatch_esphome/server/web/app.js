@@ -6,7 +6,8 @@ let cameras = [], flashLights = [], historyRows = [], ingress = false, busy = fa
 let showingOriginal = false, startPoint = null, draftPoint = null, layoutMeterId = null, messageTimer;
 let sourceBlob = null, transformEpoch = 0, transformAbort = null, rotationTimer, transformPending = false;
 let selectedDigit = -1, digitMode = "edit", digitDrag = null, digitUndo = [], digitRedo = [];
-let landmarkTarget=null, diagnosticUrls=[];
+let landmarkTarget=null, selectedLandmark=-1, diagnosticUrls=[];
+let selectedLogs=new Set(), pendingDeletion=null;
 const sourceSizes=new WeakMap();
 let lastTest=null;
 let referenceSource=null, referenceSourceId=null;
@@ -87,6 +88,7 @@ function updateControls() {
   $("cameraTest").textContent = dirty ? "Save & test OCR" : "Test OCR";
   for (const id of ["rotateLeft","rotateRight","rotation","rotationSlider","resetRotation"]) $(id).disabled = busy || !current;
   updateDigitControls();
+  updateLogControls();
 }
 function sourceControls() {
   const fromHa = $("sourceKind").value === "home_assistant";
@@ -105,11 +107,13 @@ function renderConfig() {
   if (!current) return;
   const cfg = current.config;
   cfg.alignment ??= {enabled:false,reference_id:null,anchors:[],search_margin:.12,max_angle_degrees:8,min_score:.85,min_peak_margin:.04};
+  cfg.ignored_decimal_digits ??= 0;
   jsonDraft = false;
   $("config").value = JSON.stringify(cfg, null, 2);
   for (const [id,value] of Object.entries({decimals:cfg.decimal_places,threshold:cfg.min_confidence,maxRate:cfg.max_rate_lph,interval:cfg.camera.interval_seconds,led:cfg.camera.led_duty,resolution:cfg.camera.resolution,sourceKind:cfg.source.kind,flashBrightness:cfg.source.flash?.brightness_pct ?? 20})) $(id).value = value;
   $("scheduledCapture").checked = cfg.source.enabled; $("flashEnabled").checked = Boolean(cfg.source.flash);
   $("rotation").value = $("rotationSlider").value = cfg.rotation_degrees ?? 0;
+  $("ignoredDecimals").value=cfg.ignored_decimal_digits;$("ignoredDecimals").max=cfg.decimal_places;
   $("rotationStatus").textContent = `${cfg.rotation_degrees || 0}° · Clockwise +`;
   $("alignmentEnabled").checked=cfg.alignment.enabled;
   $("alignmentScore").value=cfg.alignment.min_score;$("alignmentSearch").value=cfg.alignment.search_margin*100;$("alignmentAngle").value=cfg.alignment.max_angle_degrees;
@@ -120,6 +124,7 @@ function renderConfig() {
 function editedConfig() {
   const cfg = structuredClone(current.config);
   cfg.decimal_places = Number($("decimals").value); cfg.min_confidence = Number($("threshold").value);
+  cfg.ignored_decimal_digits=Number($("ignoredDecimals").value);
   cfg.max_rate_lph = Number($("maxRate").value); cfg.camera.interval_seconds = Number($("interval").value);
   cfg.camera.led_duty = Number($("led").value); cfg.camera.resolution = $("resolution").value;
   cfg.rotation_degrees = Number($("rotation").value);
@@ -131,7 +136,7 @@ function editedConfig() {
 async function saveConfiguration(notify = true) {
   if (!current) throw new Error("Add a meter first.");
   if (jsonDraft) throw new Error("Apply the JSON to the editor before saving, or discard your changes.");
-  const numericFields = ["decimals","threshold","maxRate","interval","rotation","alignmentScore","alignmentSearch","alignmentAngle"];
+  const numericFields = ["decimals","ignoredDecimals","threshold","maxRate","interval","rotation","alignmentScore","alignmentSearch","alignmentAngle"];
   if ($("sourceKind").value === "home_assistant" && $("flashEnabled").checked) numericFields.push("flashBrightness");
   if ($("sourceKind").value === "upload") numericFields.push("led");
   for (const id of numericFields) {
@@ -175,17 +180,19 @@ $("setupHintAction").onclick = () => {
 };
 function updateRegionCount() { $("roiCount").textContent = `${current?.config.rois.length || 0} regions`; renderDigitSelection(); }
 function baseEditorReady() { return Boolean(current && picture && !busy && !transformPending && !showingOriginal && !jsonDraft && JSON.stringify(current.config.perspective) === JSON.stringify(savedConfig?.perspective)); }
-function digitEditorReady() { return baseEditorReady() && landmarkTarget===null && (!current.config.alignment?.enabled && !savedConfig?.alignment?.enabled || JSON.stringify(editedConfig().alignment)===JSON.stringify(savedConfig?.alignment)); }
+function digitEditorReady() { return baseEditorReady() && digitMode!=="landmark" && landmarkTarget===null && (!current.config.alignment?.enabled && !savedConfig?.alignment?.enabled || JSON.stringify(editedConfig().alignment)===JSON.stringify(savedConfig?.alignment)); }
+function landmarkEditorReady() { return baseEditorReady() && !$("alignmentEnabled").checked && !savedConfig?.alignment?.enabled && sourceBlob===referenceSource && referenceSourceId===current.config.alignment?.reference_id; }
 function updateDigitControls() {
   const ready=digitEditorReady(), count=current?.config.rois.length || 0;
-  $("editDigits").disabled=!ready; $("addDigit").disabled=!ready || count>=12;
+  $("editDigits").disabled=!baseEditorReady(); $("addDigit").disabled=!baseEditorReady() || count>=12;
   $("drawDigitFrame").disabled=!ready;
   $("selectedDigit").disabled=!ready || !count;
   $("deleteDigit").disabled=!ready || selectedDigit<0 || selectedDigit>=count;
   $("editGroup").disabled=!ready || !count || digitMode!=="edit";
   for(const id of ["digitAngle","digitRotateLeft","digitRotateRight","digitResetAngle"])$(id).disabled=!ready || selectedDigit<0 || selectedDigit>=count || digitMode!=="edit";
   for(const id of ["digitX","digitY","digitW","digitH","applyDigitGeometry","duplicateDigit"])$(id).disabled=!ready || selectedDigit<0 || selectedDigit>=count || digitMode!=="edit" || $("editGroup").checked || id==="duplicateDigit" && count>=12;
-  $("undoRoi").disabled=!ready || !digitUndo.length; $("redoRoi").disabled=!ready || !digitRedo.length;
+  const canUndo=ready || landmarkEditorReady();
+  $("undoRoi").disabled=!canUndo || !digitUndo.length; $("redoRoi").disabled=!canUndo || !digitRedo.length;
   $("clearRois").disabled=!ready || !count;
   $("exportTest").disabled=busy || !lastTest;
   $("editDigits").classList.toggle("active",digitMode==="edit"); $("addDigit").classList.toggle("active",digitMode==="add");
@@ -193,10 +200,19 @@ function updateDigitControls() {
   $("digitHelp").textContent=digitMode==="add" ? ($("drawDigitFrame").value==="inner" ? "Draw tightly around the complete digit. The outer OCR frame adds 20% margins on all sides. Leave room around the digit near photo edges." : "Draw the outer OCR crop. Its dashed inner 60% should fit the complete digit, with 20% margins on each side.") : "Fit each complete digit inside its dashed inner 60%. Move or resize the solid outer crop, or use the round handle to rotate. Numbers define reading order.";
   if($("editGroup").checked && digitMode==="edit")$("digitHelp").textContent="All digit boxes: drag any box to move the group, or use the angle controls to rotate it. Uncheck to resize one digit.";
   if(landmarkTarget!==null)$("digitHelp").textContent=`Draw a box around fixed landmark ${landmarkTarget+1}. Use a stationary, distinctive mark; Escape cancels.`;
+  else if(digitMode==="landmark")$("digitHelp").textContent="Select a blue landmark to move or resize it. Delete removes it; Undo restores it. Enable automatic alignment and save after marking two fixed landmarks.";
   canvas.style.cursor=landmarkTarget!==null && baseEditorReady()?"crosshair":digitCursor(digitDrag);
   const alignment=current?.config.alignment, paused=!$("alignmentEnabled").checked && !savedConfig?.alignment?.enabled;
   $("saveReference").disabled=busy || !sourceBlob || !baseEditorReady() || !paused;
-  for(const id of ["markAnchor1","markAnchor2"])$(id).disabled=!baseEditorReady() || !alignment?.reference_id || !paused;
+  for(const id of ["markAnchor1","markAnchor2"])$(id).disabled=!landmarkEditorReady() || !alignment?.reference_id || !paused;
+  $("editLandmarks").disabled=busy || !alignment?.reference_id || !sourceBlob;
+  $("editLandmarks").textContent=alignment?.enabled || savedConfig?.alignment?.enabled?"Pause & edit landmarks":"Edit landmarks on reference";
+  const anchors=alignment?.anchors||[],picker=$("selectedLandmark");
+  if(selectedLandmark>=anchors.length)selectedLandmark=anchors.length-1;
+  picker.replaceChildren(new Option("Select landmark","-1"),...anchors.map((_,index)=>new Option(`Landmark ${index+1}`,String(index))));picker.value=String(selectedLandmark);
+  picker.disabled=!landmarkEditorReady() || !anchors.length;
+  for(const id of ["deleteLandmark","redrawLandmark","applyLandmarkGeometry","landmarkX","landmarkY","landmarkW","landmarkH"])$(id).disabled=!landmarkEditorReady() || selectedLandmark<0 || digitMode!=="landmark";
+  for(const [id,key] of [["landmarkX","x"],["landmarkY","y"],["landmarkW","w"],["landmarkH","h"]])if(document.activeElement!==$(id))$(id).value=Number(((anchors[selectedLandmark]?.[key]||0)*100).toFixed(4));
   $("alignmentEnabled").disabled=busy || !alignment?.reference_id || alignment.anchors.length!==2;
   $("landmarkStatus").textContent=landmarkTarget!==null?`Drag a box around fixed landmark ${landmarkTarget+1}. Escape cancels.`:!alignment?.reference_id?"No reference saved.":`${alignment.anchors.length}/2 landmarks marked${alignment.enabled?" · Alignment enabled":""}.`;
 }
@@ -210,9 +226,9 @@ function renderDigitSelection() {
   for(const [id,key] of [["digitX","x"],["digitY","y"],["digitW","w"],["digitH","h"]])if(document.activeElement!==$(id))$(id).value=Number(((current?.config.rois[selectedDigit]?.[key]||0)*100).toFixed(4));
   updateDigitControls();
 }
-function resetDigitEditor() { selectedDigit=-1;landmarkTarget=null;$("editGroup").checked=false;digitDrag=null;startPoint=null;draftPoint=null;digitUndo=[];digitRedo=[];digitMode=current?.config.rois.length?"edit":"add";renderDigitSelection(); }
-function digitSnapshot() { return {rois:structuredClone(current.config.rois),selected:selectedDigit}; }
-function restoreDigitSnapshot(snapshot) { current.config.rois=structuredClone(snapshot.rois); selectedDigit=snapshot.selected; digitDrag=null; startPoint=null; draftPoint=null; }
+function resetDigitEditor() { selectedDigit=-1;selectedLandmark=-1;landmarkTarget=null;$("editGroup").checked=false;digitDrag=null;startPoint=null;draftPoint=null;digitUndo=[];digitRedo=[];digitMode=current?.config.rois.length?"edit":"add";renderDigitSelection(); }
+function digitSnapshot() { return {rois:structuredClone(current.config.rois),alignment:structuredClone(current.config.alignment),selected:selectedDigit,landmark:selectedLandmark,mode:digitMode}; }
+function restoreDigitSnapshot(snapshot) { current.config.rois=structuredClone(snapshot.rois);current.config.alignment=structuredClone(snapshot.alignment);$("alignmentEnabled").checked=current.config.alignment.enabled;selectedDigit=snapshot.selected;selectedLandmark=snapshot.landmark;digitMode=snapshot.mode;landmarkTarget=null;digitDrag=null;startPoint=null;draftPoint=null; }
 function digitEditChanged() {
   $("config").value=JSON.stringify(editedConfig(),null,2);
   $("resultCard").hidden=true; $("testResult").textContent=""; $("processed").hidden=true;
@@ -220,11 +236,11 @@ function digitEditChanged() {
   setDirty(jsonDraft || JSON.stringify(editedConfig())!==JSON.stringify(savedConfig)); drawPreview(); updateHint();
 }
 function commitDigitEdit(before) {
-  if(before.rois.length===current.config.rois.length && before.rois.every((roi,index)=>["x","y","w","h","rotation_degrees"].every(key=>Math.abs((roi[key]||0)-(current.config.rois[index][key]||0))<1e-12))) { current.config.rois=structuredClone(before.rois); drawPreview(); return; }
+  if(JSON.stringify(before.rois)===JSON.stringify(current.config.rois) && JSON.stringify(before.alignment)===JSON.stringify(current.config.alignment)){drawPreview();return;}
   digitUndo.push(before); if(digitUndo.length>50)digitUndo.shift(); digitRedo=[]; digitEditChanged();
 }
 function undoDigitEdit(redo=false) {
-  if(!digitEditorReady())return;
+  if(!digitEditorReady() && !landmarkEditorReady())return;
   const source=redo?digitRedo:digitUndo, destination=redo?digitUndo:digitRedo;
   if(!source.length)return;
   destination.push(digitSnapshot()); restoreDigitSnapshot(source.pop()); digitEditChanged();
@@ -281,6 +297,30 @@ $("saveReference").onclick=act(async()=>{
   message("Reference saved. Mark two fixed landmarks, check digit boxes, then enable alignment and save.");
 });
 for(const [index,id] of ["markAnchor1","markAnchor2"].entries())$(id).onclick=()=>{if(index && !current.config.alignment.anchors.length){message("Mark landmark 1 first.",true);return;}landmarkTarget=index;drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true});};
+$("editLandmarks").onclick=act(async()=>{
+  if(dirty)throw new Error("Save or discard changes before opening the reference editor.");
+  if(current.config.alignment.enabled){current.config.alignment.enabled=false;$("alignmentEnabled").checked=false;setDirty();await saveConfiguration(false);}
+  if(!referenceSource || referenceSourceId!==current.config.alignment.reference_id){referenceSource=await(await api(`/api/meters/${selected()}/alignment/reference`)).blob();referenceSourceId=current.config.alignment.reference_id;}
+  sourceBlob=referenceSource;showingOriginal=false;await renderSourceImage();digitMode="landmark";selectedLandmark=current.config.alignment.anchors.length?0:-1;drawPreview();$("imageStamp").textContent="Saved reference · Landmark editor";stage.scrollIntoView({block:"center"});
+});
+function validLandmark(roi,index){
+  if(!roi || roi.rotation_degrees || roi.w*roi.h>.1 || !RoiGeometry.inside(roi,digitSize()))return false;
+  return current.config.alignment.anchors.every((other,i)=>i===index || Math.hypot(roi.x+roi.w/2-other.x-other.w/2,roi.y+roi.h/2-other.y-other.h/2)>=.15);
+}
+function deleteSelectedLandmark(){
+  if(!landmarkEditorReady() || !current.config.alignment.anchors[selectedLandmark])return;
+  const before=digitSnapshot();current.config.alignment.anchors.splice(selectedLandmark,1);selectedLandmark=Math.min(selectedLandmark,current.config.alignment.anchors.length-1);current.config.alignment.enabled=false;$("alignmentEnabled").checked=false;commitDigitEdit(before);message("Landmark removed. Remaining landmarks are renumbered. Alignment needs two landmarks before it can be enabled.");
+}
+$("selectedLandmark").onchange=()=>{selectedLandmark=Number($("selectedLandmark").value);digitMode="landmark";landmarkTarget=null;drawPreview();};
+$("deleteLandmark").onclick=deleteSelectedLandmark;
+$("redrawLandmark").onclick=()=>{landmarkTarget=selectedLandmark;drawPreview();canvas.focus();};
+$("applyLandmarkGeometry").onclick=()=>{
+  if(!landmarkEditorReady() || selectedLandmark<0)return;
+  const roi={rotation_degrees:0};
+  for(const [id,key] of [["landmarkX","x"],["landmarkY","y"],["landmarkW","w"],["landmarkH","h"]]){if($(id).value.trim()==="" || !Number.isFinite(Number($(id).value))){message("Enter valid landmark percentages.",true);return;}roi[key]=Number($(id).value)/100;}
+  if(roi.w<minimumDigitSize().w || roi.h<minimumDigitSize().h || !validLandmark(roi,selectedLandmark)){message("Keep landmarks inside the image, under 10% area and at least 15% apart.",true);return;}
+  const before=digitSnapshot();current.config.alignment.anchors[selectedLandmark]=roi;commitDigitEdit(before);
+};
 function resizePreview() {
   if ($("captureView").hidden) return;
   const zoom = Number($("zoom").value) / 100;
@@ -340,7 +380,10 @@ function drawPreview() {
       placed.push({left:badge.x,top:badge.y,right:badge.x+w,bottom:badge.y+h});
     });
     ctx.restore();
-    for(const [index,anchor] of (current.config.alignment?.anchors||[]).entries()){outline(anchor);ctx.strokeStyle="#72c8ff";ctx.stroke();ctx.fillStyle="#72c8ff";ctx.fillText(`L${index+1}`,anchor.x*canvas.width,Math.max(18,anchor.y*canvas.height-5));}
+    for(const [index,anchor] of (current.config.alignment?.anchors||[]).entries()){
+      outline(anchor);ctx.strokeStyle="#72c8ff";ctx.stroke();ctx.fillStyle="#72c8ff";ctx.fillText(`L${index+1}`,anchor.x*canvas.width,Math.max(18,anchor.y*canvas.height-5));
+      if(digitMode==="landmark" && selectedLandmark===index){const box=canvas.getBoundingClientRect(),w=9*canvas.width/Math.max(1,box.width),h=9*canvas.height/Math.max(1,box.height);ctx.fillStyle="#72c8ff22";ctx.fill();ctx.fillStyle="#72c8ff";for(const p of Object.values(RoiGeometry.handles(anchor,digitSize())))ctx.fillRect(p.x*canvas.width-w/2,p.y*canvas.height-h/2,w,h);}
+    }
   }
   $("original").classList.toggle("active", showingOriginal); $("overlay").classList.toggle("active", !showingOriginal);
   updateRegionCount();
@@ -447,19 +490,49 @@ function drawGraph(rows) {
   g.fillStyle=muted;g.font="12px sans-serif";g.fillText(new Date(times[0]).toLocaleString(),92,190);const end=new Date(times.at(-1)).toLocaleString();g.fillText(end,graph.width-18-g.measureText(end).width,190);
 }
 function renderHistory() {
+  selectedLogs=new Set([...selectedLogs].filter(seq=>historyRows.some(row=>row.seq===seq)));
   const filter = $("historyFilter").value;
   const rows = historyRows.filter(row => filter === "all" || (filter === "accepted" ? row.accepted : !row.accepted));
   $("historyCount").textContent = String(rows.length);
   $("history").replaceChildren(...rows.map(row => {
     const tr=document.createElement("tr");
-    [new Date(row.captured_at).toLocaleString(),row.raw_value??"—",row.value_m3??"—",`${(row.confidence*100).toFixed(1)}%`,readable(row.reason),row.source === "Docker" ? "Host OCR" : readable(row.source)].forEach((text,index)=>{const td=document.createElement("td");if(index===4){const badge=document.createElement("span");badge.className=`reading-badge ${row.accepted?"good":"bad"}`;badge.textContent=text;td.append(badge);}else td.textContent=text;tr.append(td);});return tr;
+    const cell=document.createElement("td"),check=document.createElement("input");check.type="checkbox";check.checked=selectedLogs.has(row.seq);check.setAttribute("aria-label",`Select reading ${row.seq}`);check.onchange=()=>{if(check.checked)selectedLogs.add(row.seq);else selectedLogs.delete(row.seq);updateLogControls();};cell.append(check);tr.append(cell);
+    [new Date(row.captured_at).toLocaleString(),row.raw_value??"—",row.value_m3??"—",`${(row.confidence*100).toFixed(1)}%`,readable(row.reason),row.source === "Docker" ? "Host OCR" : readable(row.source)].forEach((text,index)=>{const td=document.createElement("td");if(index===4){const badge=document.createElement("span");badge.className=`reading-badge ${row.accepted?"good":"bad"}`;badge.textContent=text;td.append(badge);}else td.textContent=text;tr.append(td);});
+    const action=document.createElement("td"),button=document.createElement("button");button.className="quiet danger";button.textContent="Delete";button.setAttribute("aria-label",`Delete reading ${row.seq}`);button.onclick=act(()=>prepareLogDeletion("selected",[row.seq]));action.append(button);tr.append(action);return tr;
   }));
-  if (!rows.length) { const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=6;td.className="empty-row";td.textContent=historyRows.length?"No readings match this filter.":"No readings yet. Test OCR, verify the meter and set a baseline.";tr.append(td);$("history").append(tr); }
+  if (!rows.length) { const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=8;td.className="empty-row";td.textContent=historyRows.length?"No readings match this filter.":"No saved logs. The current verified counter is kept separately.";tr.append(td);$("history").append(tr); }
   drawGraph(historyRows);
+  updateLogControls();
 }
 $("historyFilter").onchange = renderHistory;
+function updateLogControls(){
+  $("deleteSelectedLogs").disabled=busy || !selectedLogs.size;$("deleteSelectedLogs").textContent=selectedLogs.size?`Delete selected (${selectedLogs.size})`:"Delete selected";
+  $("clearReadingLog").disabled=busy || !historyRows.length;$("deleteRejectedLogs").disabled=busy || !historyRows.length;
+  const visible=historyRows.filter(row=>$("historyFilter").value==="all" || ($("historyFilter").value==="accepted"?row.accepted:!row.accepted));
+  $("selectVisibleLogs").disabled=busy || !visible.length;$("selectVisibleLogs").checked=visible.length>0 && visible.every(row=>selectedLogs.has(row.seq));$("selectVisibleLogs").indeterminate=visible.some(row=>selectedLogs.has(row.seq)) && !$("selectVisibleLogs").checked;
+}
+$("selectVisibleLogs").onchange=()=>{const checked=$("selectVisibleLogs").checked;for(const row of historyRows.filter(row=>$("historyFilter").value==="all" || ($("historyFilter").value==="accepted"?row.accepted:!row.accepted))){if(checked)selectedLogs.add(row.seq);else selectedLogs.delete(row.seq);}renderHistory();};
+async function prepareLogDeletion(scope,sequences=[]){
+  if(dirty)throw new Error("Save or discard configuration changes before deleting logs.");
+  const meter=selected(),selection={scope,sequences},preview=await(await api(`/api/meters/${meter}/history/delete-preview`,{method:"POST",body:JSON.stringify(selection)})).json();
+  if(!preview.count){message("No matching reading logs to delete.");return;}
+  pendingDeletion={meter,body:{...selection,confirm:"DELETE",through_seq:preview.through_seq,expected_count:preview.count}};
+  $("deleteLogSummary").textContent=`Permanently delete ${preview.count} ${scope==="rejected"?"rejected ":""}reading log${preview.count===1?"":"s"} for ${current.config.name}? New readings arriving after this review are kept.`;
+  $("deleteLogDialog").showModal();$("cancelLogDeletion").focus();
+}
+$("deleteSelectedLogs").onclick=act(()=>prepareLogDeletion("selected",[...selectedLogs]));
+$("deleteRejectedLogs").onclick=act(()=>prepareLogDeletion("rejected"));
+$("clearReadingLog").onclick=act(()=>prepareLogDeletion("all"));
+$("cancelLogDeletion").onclick=()=>{$("deleteLogDialog").close();pendingDeletion=null;};
+$("deleteLogDialog").addEventListener("cancel",()=>{pendingDeletion=null;});
+$("deleteLogForm").onsubmit=act(async()=>{
+  if(!pendingDeletion || pendingDeletion.meter!==selected())throw new Error("Review the deletion again.");
+  const result=await(await api(`/api/meters/${pendingDeletion.meter}/history/delete`,{method:"POST",body:JSON.stringify(pendingDeletion.body)})).json();
+  $("deleteLogDialog").close();pendingDeletion=null;selectedLogs.clear();await refresh();message(`${result.deleted} reading logs deleted. Current verified counter preserved.${result.image_cleanup_pending?" Some capture photos could not be removed yet.":""}`);
+});
 async function renderMeter() {
   clearDiagnostics();
+  selectedLogs.clear();pendingDeletion=null;$("deleteLogDialog").close();
   current = meters.find(meter=>meter.config.id === $("meter").value) || null;
   resetDigitEditor();
   $("meterWorkspace").hidden = !current;
@@ -499,9 +572,9 @@ async function renderResult(result, testOnly) {
   $("resultMode").textContent=testOnly?"OCR TEST · NOT RECORDED":"RECORDED CAPTURE";
   $("resultValue").textContent=result.raw_value ? `${result.raw_value} m³` : "Unreadable";
   $("resultReason").textContent=testOnly && accepted?"Would be accepted":readable(result.reason); $("resultReason").className=`result-reason ${accepted?"good":"bad"}`;
-  const digits=result.details?.digits || [],agreed=digits.filter(d=>d.recognitions?.[0]?.[0]!==null && d.recognitions?.[0]?.[0]===d.recognitions?.[1]?.[0] && d.recognitions?.length===2);
+  const digits=result.details?.digits || [],used=digits.filter(d=>d.used_for_reading!==false),agreed=used.filter(d=>d.recognitions?.[0]?.[0]!==null && d.recognitions?.[0]?.[0]===d.recognitions?.[1]?.[0] && d.recognitions?.length===2);
   const minimum=agreed.length?Math.min(...agreed.map(d=>Math.min(...d.recognitions.map(r=>r[1])))):null;
-  $("resultConfidence").textContent=digits.length?`${agreed.length}/${current.config.rois.length} digits agreed${minimum===null?"":` · Lowest agreed score ${(minimum*100).toFixed(1)}%`}${testOnly?" · History unchanged":""}`:`${((result.confidence||0)*100).toFixed(1)}% confidence${testOnly?" · History unchanged":""}`;
+  $("resultConfidence").textContent=digits.length?`${agreed.length}/${used.length} used digits agreed${minimum===null?"":` · Lowest agreed score ${(minimum*100).toFixed(1)}%`}${result.details?.ignored_decimal_digits?` · ${result.details.resolution_litres} L resolution`:""}${testOnly?" · History unchanged":""}`:`${((result.confidence||0)*100).toFixed(1)}% confidence${testOnly?" · History unchanged":""}`;
   const {images,...summary}=result;$("testResult").textContent=JSON.stringify(summary,null,2);
   $("viewTestPhoto").hidden=!images?.original;
   const alignment=result.details?.alignment;
@@ -509,7 +582,8 @@ async function renderResult(result, testOnly) {
   $("digitDiagnostics").hidden=!digits.length && !alignment;
   for(const digit of digits){
     const card=document.createElement("article");card.className=`digit-result ${digit.status||""}`;
-    const title=document.createElement("strong");title.textContent=`Digit ${digit.digit+1} · ${readable(digit.status||"quality check")}`;card.append(title);
+    const title=document.createElement("strong");title.textContent=`Digit ${digit.digit+1} · ${digit.used_for_reading===false?"Excluded at chosen precision":readable(digit.status||"quality check")}`;card.append(title);
+    if(digit.possible_transition){const note=document.createElement("p");note.textContent=`Possible wheel transition ${digit.possible_transition.join(" → ")}. No digit inferred.`;card.append(note);}
     if(images?.digits?.[digit.digit])card.append(diagnosticImage(images.digits[digit.digit],`Actual crop for digit ${digit.digit+1}`));
     for(const [index,recognition] of (digit.recognitions||[]).entries()){const line=document.createElement("p");line.textContent=`Pass ${index+1}: ${recognition[0]??"?"} · ${(recognition[1]*100).toFixed(1)}%`;card.append(line);}
     const quality=document.createElement("p");quality.textContent=`Brightness ${Math.round(digit.brightness)} · Highlights ${Math.round((digit.highlight_fraction||0)*100)}%`;card.append(quality);
@@ -550,7 +624,7 @@ $("newName").oninput=()=>{if(!customId)$("newId").value=$("newName").value.toLow
 $("registerForm").onsubmit=act(async()=>{if(dirty)throw new Error("Save or discard changes before adding a meter.");const data=await(await api("/api/meters",{method:"POST",body:JSON.stringify({id:$("newId").value,name:$("newName").value})})).json();$("cameraToken").textContent=`${data.config.name} upload token (shown once): ${data.camera_token}`;$("cameraToken").dataset.meter=data.config.id;await refresh();$("meter").value=data.config.id;await renderMeter();$("registration").hidden=true;showView("capture");message("Meter created. Select Home Assistant camera, then find your devices.");});
 $("save").onclick=act(()=>saveConfiguration());
 $("discard").onclick=()=>{if(!current||!savedConfig)return;current.config=structuredClone(savedConfig);resetDigitEditor();renderConfig();setDirty(false);void renderSourceImage();drawPreview();updateHint();message("Unsaved changes discarded.");};
-for(const element of document.querySelectorAll(".settings-column input, .settings-column select")){element.addEventListener("input",()=>{sourceControls();setDirty();});}
+for(const element of document.querySelectorAll(".settings-column input, .settings-column select")){if(["selectedLandmark","landmarkX","landmarkY","landmarkW","landmarkH"].includes(element.id))continue;element.addEventListener("input",()=>{if(element.id==="decimals")$("ignoredDecimals").max=element.value;sourceControls();setDirty();});}
 $("config").oninput=()=>{jsonDraft=true;setDirty();};
 $("loadJson").onclick=()=>{try{const cfg=JSON.parse($("config").value);if(cfg.id!==selected())throw new Error("Meter ID cannot change.");if(!cfg.camera||!cfg.source||!Array.isArray(cfg.rois))throw new Error("Configuration must include camera, source and digit regions.");current.config=cfg;resetDigitEditor();renderConfig();setDirty();drawPreview();void renderSourceImage();message("JSON loaded into the editor. Save to apply.");}catch(error){message(error.message,true);}};
 function point(event){const box=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(event.clientX-box.left)/box.width)),y:Math.max(0,Math.min(1,(event.clientY-box.top)/box.height))};}
@@ -560,7 +634,7 @@ function cancelDigitDrag() {
 }
 canvas.onpointerdown=event=>{
   if(!event.isPrimary || event.button!==0 || digitDrag)return;
-  if(!(landmarkTarget!==null?baseEditorReady():digitEditorReady())) {
+  if(!(landmarkTarget!==null || digitMode==="landmark"?landmarkEditorReady():digitEditorReady())) {
     if(showingOriginal)message("Switch to Aligned / regions to edit digit boxes.",true);
     else if(jsonDraft)message("Apply or discard the JSON edit before editing digits.",true);
     else if(current && JSON.stringify(current.config.perspective)!==JSON.stringify(savedConfig?.perspective))message("Save perspective settings before editing digit regions.",true);
@@ -569,6 +643,11 @@ canvas.onpointerdown=event=>{
   event.preventDefault();canvas.focus({preventScroll:true});
   const position=point(event),before=digitSnapshot();
   if(landmarkTarget!==null){startPoint=position;draftPoint=position;digitDrag={kind:"landmark",target:landmarkTarget,before,pointerId:event.pointerId};}
+  else if(digitMode==="landmark"){
+    const box=canvas.getBoundingClientRect(),hit=RoiGeometry.hitTest(current.config.alignment.anchors,position,{x:8/box.width,y:8/box.height},selectedLandmark,digitSize());
+    selectedLandmark=hit?.index??-1;
+    if(hit)digitDrag={...hit,kind:"landmark-edit",before,origin:position,roi:{...current.config.alignment.anchors[hit.index]},pointerId:event.pointerId};
+  }
   else if(digitMode==="add") {
     if(current.config.rois.length>=12){message("Up to 12 digit regions are supported.",true);return;}
     startPoint=position;draftPoint=position;digitDrag={kind:"add",before,pointerId:event.pointerId};
@@ -584,6 +663,12 @@ function updateDigitDrag(position) {
   if(["add","landmark"].includes(digitDrag.kind))draftPoint=position;
   else {
     const {roi,origin,handle,index}=digitDrag;
+    if(digitDrag.kind==="landmark-edit"){
+      const dx=position.x-origin.x,dy=position.y-origin.y,anchor=handle==="move"?null:RoiGeometry.handles(roi,digitSize())[handle];
+      const next=handle==="move"?RoiGeometry.move(roi,dx,dy,digitSize()):RoiGeometry.resize(roi,handle,{x:anchor.x+dx,y:anchor.y+dy},minimumDigitSize(),digitSize());
+      if(validLandmark(next,index))current.config.alignment.anchors[index]=next;
+      drawPreview();return;
+    }
     if(handle==="rotate") {
       const delta=RoiGeometry.angleAt(roi,position,digitSize())-RoiGeometry.angleAt(roi,origin,digitSize());
       const rotated=RoiGeometry.rotate(roi,(roi.rotation_degrees||0)+delta,digitSize());
@@ -607,9 +692,9 @@ canvas.onpointerup=event=>{
   const {before,kind}=digitDrag;
   if(kind==="landmark"){
     const roi=RoiGeometry.fromPoints(startPoint,draftPoint,minimumDigitSize());
-    if(roi && roi.w*roi.h<=.1){current.config.alignment.anchors[digitDrag.target]=roi;landmarkTarget=null;$("config").value=JSON.stringify(editedConfig(),null,2);setDirty();}
+    if(validLandmark(roi,digitDrag.target)){current.config.alignment.anchors[digitDrag.target]=roi;selectedLandmark=digitDrag.target;digitMode="landmark";landmarkTarget=null;}
     else message("Choose a landmark at least 9 image pixels wide/high, covering at most 10% of the photo.",true);
-    digitDrag=null;startPoint=null;draftPoint=null;drawPreview();return;
+    digitDrag=null;startPoint=null;draftPoint=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);commitDigitEdit(before);return;
   }
   if(kind==="add") {
     const drawn=RoiGeometry.fromPoints(startPoint,draftPoint,minimumDigitSize());
@@ -626,13 +711,20 @@ canvas.onkeydown=event=>{
   if(event.key==="Escape") {
     event.preventDefault();if(digitDrag)cancelDigitDrag();else{selectedDigit=-1;landmarkTarget=null;drawPreview();}return;
   }
-  if(!digitEditorReady() || digitDrag)return;
+  if((!digitEditorReady() && !(digitMode==="landmark" && landmarkEditorReady())) || digitDrag)return;
   if(event.ctrlKey || event.metaKey) {
     if(event.key.toLowerCase()==="z"){event.preventDefault();undoDigitEdit(event.shiftKey);}
     else if(event.key.toLowerCase()==="y"){event.preventDefault();undoDigitEdit(true);}
     return;
   }
-  if(["Delete","Backspace"].includes(event.key)){event.preventDefault();deleteSelectedDigit();return;}
+  if(["Delete","Backspace"].includes(event.key)){event.preventDefault();if(digitMode==="landmark")deleteSelectedLandmark();else deleteSelectedDigit();return;}
+  if(digitMode==="landmark"){
+    const roi=current.config.alignment.anchors[selectedLandmark];
+    if(!roi || !["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key))return;
+    event.preventDefault();const step=event.shiftKey?10:1,dx=(event.key==="ArrowRight"?step:event.key==="ArrowLeft"?-step:0)/canvas.width,dy=(event.key==="ArrowDown"?step:event.key==="ArrowUp"?-step:0)/canvas.height;
+    const next=event.altKey?RoiGeometry.resize(roi,dx?"e":"s",{x:roi.x+roi.w+dx,y:roi.y+roi.h+dy},minimumDigitSize(),digitSize()):RoiGeometry.move(roi,dx,dy,digitSize());
+    if(validLandmark(next,selectedLandmark)){const before=digitSnapshot();current.config.alignment.anchors[selectedLandmark]=next;commitDigitEdit(before);}return;
+  }
   const roi=current.config.rois[selectedDigit];
   if(roi && ["BracketLeft","BracketRight"].includes(event.code)){event.preventDefault();changeDigitRotation((((roi.rotation_degrees||0)+(event.code==="BracketRight"?1:-1)*(event.shiftKey?10:1)+540)%360)-180);return;}
   if(!roi || !["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key))return;

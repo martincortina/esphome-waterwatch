@@ -209,6 +209,7 @@ class Pipeline:
                                        overlay=aligned, crops=[jpeg(color) for color in colors])
         digits, confidences, diagnostics, previews, crops = [], [], [], [], []
         poor_quality = False
+        used_count = len(cfg.rois) - cfg.ignored_decimal_digits
         for index, roi in enumerate(cfg.rois):
             corners = digit_corners(roi, width, height)
             try:
@@ -220,6 +221,7 @@ class Pipeline:
             sharpness = float(cv2.Laplacian(patch, cv2.CV_64F).var())
             brightness = float(patch.mean())
             diagnostics.append({"digit": index, "sharpness": sharpness, "brightness": brightness,
+                                "used_for_reading": index < used_count,
                                 "rotation_degrees": roi.rotation_degrees,
                                 "contrast": round(float(np.percentile(patch, 95)-np.percentile(patch, 5)), 2),
                                 "highlight_fraction": round(float(np.mean(patch >= 245)), 4),
@@ -247,7 +249,7 @@ class Pipeline:
                 diagnostics[-1]["status"] = "poor_image_quality"
                 digits.append("?")
                 confidences.append(0)
-                poor_quality = True
+                poor_quality = poor_quality or index < used_count
                 previews.append(cv2.resize(patch, (110, 150)))
                 continue
             if row_result is not None:
@@ -267,6 +269,13 @@ class Pipeline:
                     return Recognition(reason="ocr_engine_failure", details={**context, "digits": diagnostics},
                                        overlay=jpeg(overlay), aligned=aligned, crops=crops)
             diagnostics[-1]["recognitions"] = results
+            choices = {r[0] for r in results if r[0] is not None and r[1] >= .5}
+            if len(choices) == 2 and all(len(c) == 1 and c in "0123456789" for c in choices):
+                for first in sorted(choices):
+                    following = str((int(first)+1) % 10)
+                    if following in choices:
+                        diagnostics[-1]["possible_transition"] = [first, following]
+                        break
             agreed = results[0][0] is not None and results[0][0] == results[1][0]
             diagnostics[-1]["status"] = ("agreed" if min(r[1] for r in results) >= cfg.min_confidence else "low_confidence") if agreed else "ambiguous"
             # Require agreement between two preprocessing passes. Never guess a missing digit.
@@ -276,15 +285,21 @@ class Pipeline:
             else:
                 digits.append(results[0][0])
                 confidences.append(min(r[1] for r in results))
-        text = "".join(digits)
+        full_text = "".join(digits)
         if cfg.decimal_places:
-            text = text[: -cfg.decimal_places] + "." + text[-cfg.decimal_places :]
+            full_text = full_text[: -cfg.decimal_places] + "." + full_text[-cfg.decimal_places :]
+        text = "".join(digits[:used_count])
+        decimals = cfg.decimal_places - cfg.ignored_decimal_digits
+        if decimals:
+            text = text[:-decimals] + "." + text[-decimals:]
         readable = "?" not in text
         return Recognition(
             raw_value=text,
-            confidence=min(confidences),
+            confidence=min(confidences[:used_count]),
             reason="poor_image_quality" if poor_quality else "candidate" if readable else "ambiguous_digit",
             details={**context, "digits": diagnostics, "engine": type(self.engine).__name__,
+                     "full_raw_value": full_text, "ignored_decimal_digits": cfg.ignored_decimal_digits,
+                     "resolution_litres": 1000 * 10**-decimals,
                      "rotation_degrees": cfg.rotation_degrees},
             overlay=jpeg(overlay),
             processed=jpeg(row_result.processed if row_result is not None else np.hstack(previews)),

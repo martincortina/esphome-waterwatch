@@ -150,6 +150,8 @@ class Service:
         latest = self.store.one(
             "SELECT * FROM readings WHERE meter_id=? ORDER BY seq DESC LIMIT 1", (meter_id,)
         )
+        if good and good.get("history_deleted") and latest and latest["seq"] < good["seq"]:
+            latest = None
         camera = self.store.one("SELECT last_seen,rssi FROM meters WHERE id=?", (meter_id,))
         now = utcnow()
         stale = (
@@ -196,6 +198,14 @@ class Service:
         with self.processing:
             cfg = self.store.config(meter_id)
             if not test_only:
+                deleted = self.store.one(
+                    "SELECT fingerprint FROM deleted_events WHERE meter_id=? AND event_id=?",
+                    (meter_id, event_id),
+                )
+                if deleted:
+                    if deleted["fingerprint"] != fingerprint:
+                        raise ValueError("Event ID was already used with different image or timestamp")
+                    return {"event_id": event_id, "duplicate": True, "deleted": True}
                 prior = self.store.one(
                     "SELECT * FROM readings WHERE meter_id=? AND event_id=?", (meter_id, event_id)
                 )
@@ -260,6 +270,9 @@ class Service:
                     ),
                 )
                 # A delayed capture must not make the camera appear freshly connected.
+                if capture_metadata and capture_metadata.get("camera_entity") and capture_metadata.get("image_sha256"):
+                    db.execute("INSERT INTO camera_frames(meter_id,camera_entity,image_sha256) VALUES(?,?,?) ON CONFLICT(meter_id,camera_entity) DO UPDATE SET image_sha256=excluded.image_sha256",
+                               (meter_id, capture_metadata["camera_entity"], capture_metadata["image_sha256"]))
                 if (
                     utcnow() - datetime.fromisoformat(captured_at)
                 ).total_seconds() <= cfg.camera.interval_seconds * 2:
@@ -340,6 +353,61 @@ class Service:
                 }
             )
         return results
+
+    def _log_rows(self, meter_id, selection, through_seq):
+        clause, params = "", [meter_id, through_seq]
+        if selection.scope == "rejected":
+            clause = " AND accepted=0"
+        elif selection.scope == "selected":
+            clause = " AND seq IN (" + ",".join("?" for _ in selection.sequences) + ")"
+            params.extend(selection.sequences)
+        rows = self.store.all("SELECT * FROM readings WHERE meter_id=? AND seq<=?" + clause, params)
+        if selection.scope == "selected" and len(rows) != len(selection.sequences):
+            raise ValueError("One or more selected readings are no longer available for this meter")
+        return rows
+
+    def log_delete_preview(self, meter_id, selection):
+        with self.processing:
+            self.store.config(meter_id)
+            cutoff = self.store.one("SELECT max(seq) AS seq FROM readings WHERE meter_id=?", (meter_id,))["seq"] or 0
+            rows = self._log_rows(meter_id, selection, cutoff)
+            return {"count": len(rows), "through_seq": cutoff, "counter_preserved": True}
+
+    def delete_logs(self, meter_id, selection):
+        with self.processing, self.store.transaction() as db:
+            cfg = self.store.config(meter_id)
+            rows = self._log_rows(meter_id, selection, selection.through_seq)
+            if len(rows) != selection.expected_count:
+                raise ValueError("The log changed. Review the deletion again")
+            if cfg.source.camera_entity:
+                digest = self.store.camera_frame(meter_id, cfg.source.camera_entity)
+                if digest:
+                    db.execute("INSERT OR IGNORE INTO camera_frames(meter_id,camera_entity,image_sha256) VALUES(?,?,?)", (meter_id, cfg.source.camera_entity, digest))
+            good = self.store.last_good(meter_id)
+            if good:
+                snapshot = {**good, "fingerprint": "checkpoint", "image_key": None, "raw_value": None,
+                            "details": "{}", "history_deleted": good.get("history_deleted", False) or any(row["seq"] == good["seq"] for row in rows)}
+                db.execute("INSERT INTO counter_checkpoints(meter_id,snapshot) VALUES(?,?) ON CONFLICT(meter_id) DO UPDATE SET snapshot=excluded.snapshot",
+                           (meter_id, json.dumps(snapshot)))
+            for row in rows:
+                db.execute("INSERT OR IGNORE INTO deleted_events(meter_id,event_id,fingerprint) VALUES(?,?,?)",
+                           (meter_id, row["event_id"], row["fingerprint"]))
+                db.execute("DELETE FROM readings WHERE meter_id=? AND seq=?", (meter_id, row["seq"]))
+            self._queue(db, meter_id)
+        pending = False
+        for row in rows:
+            key = row["image_key"]
+            if not key or len(key) != 32 or any(c not in "0123456789abcdef" for c in key):
+                continue
+            for variant in ("original", "overlay", "processed"):
+                path = (self.images / f"{key}-{variant}.jpg").resolve()
+                if path.parent != self.images.resolve():
+                    continue
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pending = True
+        return {"deleted": len(rows), "counter_preserved": True, "image_cleanup_pending": pending}
 
     def cleanup_images(self):
         cutoff = time.time() - self.settings.image_retention_days * 86400

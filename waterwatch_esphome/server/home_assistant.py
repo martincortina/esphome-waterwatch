@@ -212,20 +212,11 @@ class CameraCollector:
                 digest = hashlib.sha256(data).hexdigest()
                 # The proxy has no trustworthy exposure timestamp. An identical response
                 # must not make an old/frozen frame count as a fresh verified reading.
-                previous = self.service.store.one(
-                    "SELECT details FROM readings WHERE meter_id=? AND image_key IS NOT NULL "
-                    "ORDER BY seq DESC LIMIT 1", (meter_id,),
-                )
-                if not test_only and previous:
-                    capture = json.loads(previous["details"]).get("capture", {})
-                    if (
-                        capture.get("camera_entity") == cfg.source.camera_entity
-                        and capture.get("image_sha256") == digest
-                    ):
-                        raise CameraError("camera_repeated_frame")
                 with self.service.processing:
                     if self.service.store.config(meter_id) != cfg:
                         raise CameraError("configuration_changed_during_capture")
+                    if not test_only and self.service.store.camera_frame(meter_id, cfg.source.camera_entity) == digest:
+                        raise CameraError("camera_repeated_frame")
                     result = self.service.process(
                         meter_id, f"ha-{uuid.uuid4().hex}", captured_at, data,
                         test_only=test_only,
