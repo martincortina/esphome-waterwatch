@@ -374,3 +374,35 @@ can make the dial uncertain. Full-turn spinners and unnumbered flow indicators
 are unsupported. A preview is not proof of measurement accuracy. Verify the scale
 and pointer orientation against the physical meter at several positions, including
 carries; this feature does not infer coupled carries in larger wheels.
+
+## Verified visual references (0.12.1)
+
+If glass distortion or a counterweight defeats the general recognizer, an
+administrator can attach private, physically verified reference crops to a region.
+`POST /api/meters/{id}/recognition-reference?region=0&value=1` accepts a source
+JPEG/PNG and returns a reference descriptor. Append that descriptor to the region's
+`visual_references` in its saved configuration. Region indices start at zero;
+each region supports at most eight references. Digital labels must be integers
+with no uncertainty. A pointer label is a position on its 0–9 scale and can include
+an explicit `uncertainty` up to 0.49. Use several distinct calibration photos;
+reserve fresh photos for validation. Never label an unknown digit by its OCR result.
+
+Digital reference recognition compares foreground shape and edges, with at least
+0.85 support in both views, or the configured threshold if higher. Strong unrelated
+text predictions veto a reference match. Ordinary confident OCR remains in use
+for digits that do not need references. A reference does not train the general
+model or infer missing numbers from the previous reading.
+
+Pointer references compare angular colour profiles in two radial bands, tolerate
+white-balance changes, and follow pointer rotation. Both bands need sufficient
+correlation, separation from competing angles and angular agreement. Their scores
+are measured similarities, not probabilities. A verified approximate position near
+a numbered tick can be shown in a preview while its completed digit remains
+uncertain. It cannot silently supply a numeric digit to the total.
+
+References stay in the app's private data directory and backups. Changing region,
+image orientation, dial calibration or alignment invalidates the affected
+references; recapture and verify them after such changes. Removing descriptors
+from the configuration disables their use. References are calibration aids, not
+proof of accuracy at unseen positions. Test transitions, glare and moving pointers
+separately. A stationary 100-photo run measures repeatability at that state.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.1
+
+- Correct whole-digit phase support around a centered rolling wheel.
+- Add optional private, labelled glyph references with measured foreground/edge
+  agreement, and pointer references with two angular bands and competing-angle
+  guards. Geometry changes invalidate references; thresholds remain enforced.
+- Show a verified approximate pointer position separately from its completed
+  digit. Boundary positions cannot be silently added to a reading.
+- Preserve baselines, history, MQTT settings and the configured reading precision.
+
 ## 0.12.0
 
 - Add calibrated red/dark analog pointer regions with centre, zero and direction.

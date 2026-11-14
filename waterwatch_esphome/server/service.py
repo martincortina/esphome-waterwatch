@@ -11,8 +11,9 @@ from datetime import datetime
 import cv2
 
 from server.alignment import AlignmentError, register
-from server.models import ManualReading, MeterConfig, m3, micro_m3, timestamp, utcnow
-from server.ocr import Pipeline, align, decode
+from server.models import ManualReading, MeterConfig, VisualReference, m3, micro_m3, timestamp, utcnow
+from server.ocr import Pipeline, align, crop_digit, decode
+from server.reference_ocr import ReferenceSample
 from server.storage import Store
 from server.validation import validate
 
@@ -45,7 +46,8 @@ class Service:
         self.references = settings.data_dir / "references"
         self.references.mkdir(exist_ok=True)
         self.store = Store(settings.data_dir / "waterwatch.sqlite3")
-        self.pipeline = pipeline or Pipeline(reference_loader=self.load_reference)
+        self.pipeline = pipeline or Pipeline(reference_loader=self.load_reference,
+                                             recognition_loader=self.load_visual_references)
         # Bound inference concurrency and serialize validation, configuration, and corrections.
         self.processing = threading.RLock()
 
@@ -114,6 +116,48 @@ class Service:
         if image is None:
             raise AlignmentError("alignment_reference_missing")
         return image
+
+    def visual_geometry(self, cfg, index):
+        roi = cfg.rois[index]
+        return {**self.reference_geometry(cfg),
+                "alignment": cfg.alignment.model_dump(),
+                "roi": roi.model_dump(exclude={"visual_references", "include_in_reading"})}
+
+    def save_visual_reference(self, meter_id, index, value, uncertainty, data):
+        with self.processing:
+            cfg = self.store.config(meter_id)
+            if not 0 <= index < len(cfg.rois):
+                raise ValueError("Choose an existing region")
+            label = VisualReference(id=uuid.uuid4().hex, value=value, uncertainty=uncertainty)
+            roi = cfg.rois[index]
+            if roi.kind == "digit" and (not label.value.is_integer() or label.uncertainty):
+                raise ValueError("A digit reference requires a verified integer label")
+            image = self.transform(data, cfg)
+            patch = crop_digit(image, roi)
+            ok, encoded = cv2.imencode(".png", patch)
+            if not ok:
+                raise ValueError("Cannot store reference crop")
+            path = self.references / f"recognition-{meter_id}-{label.id}.png"
+            path.write_bytes(encoded.tobytes())
+            path.with_suffix(".json").write_text(json.dumps({
+                "geometry": self.visual_geometry(cfg, index), "label": label.model_dump(),
+                "image_sha256": hashlib.sha256(data).hexdigest(),
+            }), encoding="utf-8")
+            return {"reference": label.model_dump(), "width": patch.shape[1], "height": patch.shape[0]}
+
+    def load_visual_references(self, cfg, index):
+        samples = []
+        for label in cfg.rois[index].visual_references:
+            path = self.references / f"recognition-{cfg.id}-{label.id}.png"
+            if not path.is_file() or not path.with_suffix(".json").is_file():
+                continue
+            metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+            if metadata.get("geometry") != self.visual_geometry(cfg, index) or metadata.get("label") != label.model_dump():
+                continue
+            image = cv2.imread(str(path))
+            if image is not None:
+                samples.append(ReferenceSample(image, label.value, label.uncertainty, label.id))
+        return samples
 
     def validate_alignment(self, cfg):
         reference = self.load_reference(cfg)

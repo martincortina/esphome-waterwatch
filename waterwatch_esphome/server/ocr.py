@@ -13,6 +13,7 @@ from server.alignment import AlignmentError, register
 from server.analog_ocr import recognize_dial
 from server.models import ROI, MeterConfig
 from server.neural_ocr import NeuralOCREngine, NeuralOCRError
+from server.reference_ocr import recognize_glyph, recognize_pointer
 from server.wheel_ocr import WheelOCREngine, resolve_wheel
 
 
@@ -173,10 +174,11 @@ class TesseractEngine:
 
 
 class Pipeline:
-    def __init__(self, engine=None, reference_loader=None, wheel_engine=None):
+    def __init__(self, engine=None, reference_loader=None, wheel_engine=None, recognition_loader=None):
         self.engine = engine or NeuralOCREngine()
         self.reference_loader = reference_loader
         self.wheel_engine = wheel_engine or WheelOCREngine()
+        self.recognition_loader = recognition_loader
 
     def run(self, data: bytes, cfg: MeterConfig) -> Recognition:
         context = {}
@@ -311,6 +313,38 @@ class Pipeline:
                 except (OSError, NeuralOCRError):
                     results = [(None, 0.0), (None, 0.0)]
                     diagnostics[-1].update(wheel_policy="unavailable", recognitions=results)
+            samples = []
+            if roi.visual_references and self.recognition_loader is not None:
+                try:
+                    samples = self.recognition_loader(cfg, index)
+                except (OSError, ValueError):
+                    diagnostics[-1]["reference_error"] = "reference_missing_or_changed"
+            if samples and roi.kind == "digit" and not (
+                results[0][0] is not None and results[0][0] == results[1][0]
+                and min(score for _, score in results) >= cfg.min_confidence
+            ):
+                reference_result = recognize_glyph(color, samples, cfg.min_confidence)
+                if reference_result is not None:
+                    label = reference_result["results"][0][0]
+                    adjacent = {label, str((int(label)-1) % 10), str((int(label)+1) % 10)}
+                    # Adjacent whole/partial views can disagree at a wheel carry;
+                    # a strong unrelated number must still veto a reference fit.
+                    conflict = any(value is not None and value not in adjacent and score >= cfg.min_confidence
+                                   for value, score in raw_text)
+                    if not conflict:
+                        diagnostics[-1]["model_recognitions"] = results
+                        results = reference_result.pop("results")
+                        diagnostics[-1].update(reference_result, recognitions=results)
+            if samples and roi.kind == "analog":
+                position = recognize_pointer(color, roi.dial, samples, cfg.min_confidence)
+                if position is not None:
+                    diagnostics[-1].update(position)
+                    views = position["analog_views"]
+                    near_tick = any(min(v["phase"] % 1, 1-v["phase"] % 1) <= v["uncertainty"]+.08 for v in views)
+                    values = [str(int(v["phase"]) % 10) for v in views]
+                    results = [(None if near_tick or values[0] != values[1] else value, view["score"])
+                               for value, view in zip(values, views, strict=True)]
+                    diagnostics[-1].update(recognitions=results, analog_digit_boundary=near_tick)
             choices = {r[0] for r in raw_text if r[0] is not None and r[1] >= .5}
             if len(choices) == 2 and all(len(c) == 1 and c in "0123456789" for c in choices):
                 for first in sorted(choices):
@@ -326,6 +360,10 @@ class Pipeline:
                 diagnostics[-1]["status"] = "rolling_verified"
             elif diagnostics[-1].get("wheel_policy") in {"uncertain", "unavailable"}:
                 diagnostics[-1]["status"] = "rolling_uncertain"
+            if diagnostics[-1].get("reference_policy") == "verified_glyph_shape":
+                diagnostics[-1]["status"] = "reference_verified"
+            if roi.kind == "analog" and diagnostics[-1].get("pointer_position_verified") and index not in used_indices:
+                diagnostics[-1]["status"] = "analog_position_verified"
             # Require agreement between two preprocessing passes. Never guess a missing digit.
             if results[0][0] is None or results[0][0] != results[1][0]:
                 digits.append("?")

@@ -48,6 +48,12 @@ class DialConfig(StrictModel):
         return self
 
 
+class VisualReference(StrictModel):
+    id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    value: float = Field(ge=0, lt=10)
+    uncertainty: float = Field(default=0, ge=0, le=.49)
+
+
 class ROI(StrictModel):
     x: float = Field(ge=0, lt=1)
     y: float = Field(ge=0, lt=1)
@@ -58,6 +64,7 @@ class ROI(StrictModel):
     kind: Literal["digit", "analog"] = "digit"
     dial: DialConfig | None = None
     include_in_reading: bool = True
+    visual_references: list[VisualReference] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def bounds(self):
@@ -65,6 +72,8 @@ class ROI(StrictModel):
             raise ValueError("ROI must be inside the image")
         if self.kind == "analog" and self.dial is None:
             self.dial = DialConfig()
+        if self.kind == "digit" and any(not ref.value.is_integer() or ref.uncertainty for ref in self.visual_references):
+            raise ValueError("Digit references need an integer label without phase uncertainty")
         return self
 
 

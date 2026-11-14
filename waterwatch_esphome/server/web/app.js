@@ -12,7 +12,7 @@ const sourceSizes=new WeakMap();
 let lastTest=null;
 let referenceSource=null, referenceSourceId=null;
 let dialMark=null;
-const verifiedStatuses=new Set(["agreed","rolling_verified","analog_verified"]);
+const verifiedStatuses=new Set(["agreed","rolling_verified","analog_verified","reference_verified","analog_position_verified"]);
 const canvas = $("preview"), ctx = canvas.getContext("2d"), stage = $("previewStage");
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const reasons = {
@@ -22,6 +22,7 @@ const reasons = {
   ambiguous_digit:"Ambiguous digit", poor_image_quality:"Image needs adjustment", unreadable:"Unreadable",
   rolling_verified:"Rolling · verified", rolling_uncertain:"Wheel needs review",
   analog_verified:"Pointer · verified", analog_uncertain:"Pointer needs review", preview_only:"Preview only",
+  reference_verified:"Shape · verified", analog_position_verified:"Position · verified",
   camera_unavailable:"Camera unavailable", camera_repeated_frame:"Repeated camera image",
   flash_light_must_be_off:"Turn the meter light off before a flash capture",
   alignment_reference_missing:"Save an alignment reference before enabling alignment",
@@ -711,15 +712,17 @@ async function renderResult(result, testOnly) {
   $("digitDiagnostics").hidden=!digits.length && !alignment;
   for(const digit of digits){
     const card=document.createElement("article");card.className=`digit-result ${digit.status||""}`;
-    const title=document.createElement("strong");title.textContent=`${digit.kind==="analog"?"Dial":"Digit"} ${digit.digit+1} · ${digit.included_in_total===false?"Preview only":digit.used_for_reading===false?"Excluded at chosen precision":readable(digit.status||"quality check")}`;card.append(title);
+    const title=document.createElement("strong");title.textContent=`${digit.kind==="analog"?"Dial":"Digit"} ${digit.digit+1} · ${digit.included_in_total===false?`${readable(digit.status||"quality check")} · Preview`:digit.used_for_reading===false?"Excluded at chosen precision":readable(digit.status||"quality check")}`;card.append(title);
     if(digit.possible_transition && digit.wheel_policy!=="transition_verified"){const note=document.createElement("p");note.textContent=`Possible wheel transition ${digit.possible_transition.join(" → ")}. No digit inferred.`;card.append(note);}
     if(images?.digits?.[digit.digit])card.append(diagnosticImage(images.digits[digit.digit],`Actual crop for digit ${digit.digit+1}`));
-    const value=document.createElement("span");value.className="digit-value";value.textContent=digit.recognitions?.[0]?.[0] && digit.recognitions[0][0]===digit.recognitions?.[1]?.[0]?digit.recognitions[0][0]:"?";card.append(value);
+    const value=document.createElement("span");value.className="digit-value";value.textContent=digit.recognitions?.[0]?.[0] && digit.recognitions[0][0]===digit.recognitions?.[1]?.[0]?digit.recognitions[0][0]:"?";
+    if(digit.pointer_position_verified && digit.analog_views?.length){const phases=digit.analog_views.map(v=>Number(v.phase)*Math.PI/5);const position=(Math.atan2(phases.reduce((s,a)=>s+Math.sin(a),0),phases.reduce((s,a)=>s+Math.cos(a),0))*5/Math.PI+10)%10;value.textContent=`≈${(Math.round(position*10)/10%10).toFixed(1)}`;}card.append(value);
     if(digit.wheel_views?.length){const phase=document.createElement("p");phase.className="wheel-phase";phase.textContent=`Wheel position ${digit.wheel_views.map(v=>Number(v.phase).toFixed(1)).join(" / ")}${digit.wheel_policy==="transition_verified"?" · completed digit used":""}`;card.append(phase);}
     if(digit.analog_views?.length){const phase=document.createElement("p");phase.className="wheel-phase";phase.textContent=`Pointer position ${digit.analog_views.map(v=>Number(v.phase).toFixed(2)).join(" / ")} on 0–9 scale`;card.append(phase);}
-    if(digit.analog_policy==="near_digit_boundary"){const note=document.createElement("p");note.textContent="Near a numbered tick; completed digit remains uncertain.";card.append(note);}
+    if(digit.analog_policy==="near_digit_boundary" || digit.analog_digit_boundary){const note=document.createElement("p");note.textContent="Near a numbered tick; position is approximate. No completed digit inferred.";card.append(note);}
     const scores=document.createElement("details"),label=document.createElement("summary");label.textContent="Scores & image quality";scores.append(label);
     for(const [index,recognition] of (digit.recognitions||[]).entries()){const line=document.createElement("p");line.textContent=`${digit.recognition_sources?.[index]||`Pass ${index+1}`}: ${recognition[0]??"?"} · ${(recognition[1]*100).toFixed(1)}%`;scores.append(line);}
+    if(digit.reference_policy || digit.pointer_position_verified){const note=document.createElement("p");note.textContent=`Compared with a labelled private photo.${digit.pointer_position_verified?` Position uncertainty ±${Math.max(...digit.analog_views.map(v=>v.uncertainty)).toFixed(2)} on 0–9 scale.`:" Scores measure shape similarity."}`;scores.append(note);}
     if(digit.recognition_policy==="assisted_consensus" && !digit.wheel_views){const note=document.createElement("p");note.textContent="Supported by two normalized Latin-model views";scores.append(note);}
     const quality=document.createElement("p");quality.textContent=`Brightness ${Math.round(digit.brightness)} · Highlights ${Math.round((digit.highlight_fraction||0)*100)}%`;scores.append(quality);
     if(digit.quality_warnings?.length){const note=document.createElement("p");note.textContent=digit.quality_warnings.map(readable).join(" · ");scores.append(note);}

@@ -57,6 +57,19 @@ def test_centered_digit_requires_actual_matching_text_not_phase_rounding_alone()
     assert resolve_wheel(views, [("6", .99)]*2, [], .85)[0] == [(None, 0)]*2
 
 
+def test_center_support_spans_both_sides_of_integer_without_boosting_text_score():
+    logits = np.full(100, -30.)
+    logits[49] = logits[50] = 0
+    evidence = phase_evidence(logits)
+    assert evidence["score"] == pytest.approx(.5)
+    assert evidence["center_score"] == pytest.approx(1)
+    text = [("5", .93), ("5", .94)]
+    result, details = resolve_wheel([evidence]*2, text, text, .85)
+    assert result == text and details["wheel_policy"] == "centered_digit_verified"
+    weak = {**evidence, "center_score": .7}
+    assert resolve_wheel([weak]*2, text, text, .85)[0] == [(None, 0)]*2
+
+
 class TextEngine:
     def __init__(self):
         self.values = iter([("1", .99), ("1", .99), ("7", .95), ("8", .96)])

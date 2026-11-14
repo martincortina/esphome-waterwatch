@@ -29,8 +29,11 @@ def phase_evidence(logits):
     scores /= scores.sum()
     peak = int(scores.argmax())
     digit = peak // 10
+    center = (int(np.floor(peak/10+.5)) % 10)*10
+    center_indices = (np.arange(center-2, center+3) % 100).astype(int)
     return {"phase": peak / 10, "completed_digit": str(digit),
-            "score": float(scores[digit*10:(digit+1)*10].sum())}
+            "score": float(scores[digit*10:(digit+1)*10].sum()),
+            "center_score": float(scores[center_indices].sum())}
 
 
 def resolve_wheel(views, text_results, raw_text, threshold):
@@ -46,19 +49,21 @@ def resolve_wheel(views, text_results, raw_text, threshold):
         return rejected, detail
     phases = [v["phase"] for v in views]
     distance = abs((phases[0]-phases[1]+5) % 10-5)
-    if distance > .2 + 1e-9 or min(v["score"] for v in views) < threshold:
+    if distance > .2 + 1e-9:
         return rejected, detail
     # At a centered digit, phase 6.9 and 7.0 can describe the same visible 7.
     nearest = [int(np.floor(p+.5)) % 10 for p in phases]
     centered = all(abs((p-n+5) % 10-5) <= .2+1e-9 for p, n in zip(phases, nearest, strict=True))
     if centered:
         if (nearest[0] == nearest[1] and len(text_results) == 2
+                and min(v.get("center_score", v["score"]) for v in views) >= threshold
                 and all(d == str(nearest[0]) and s >= threshold for d, s in text_results)):
             detail["wheel_policy"] = "centered_digit_verified"
             return text_results, detail
         return rejected, detail
     digits = [v["completed_digit"] for v in views]
-    if digits[0] != digits[1] or any(not .2 < p % 1 < .8 for p in phases):
+    if (digits[0] != digits[1] or min(v["score"] for v in views) < threshold
+            or any(not .2 < p % 1 < .8 for p in phases)):
         return rejected, detail
     digit = digits[0]
     following = str((int(digit)+1) % 10)

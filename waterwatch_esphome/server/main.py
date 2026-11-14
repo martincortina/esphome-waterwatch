@@ -80,7 +80,7 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
 
     app = FastAPI(
         title="WaterWatch",
-        version="0.12.0",
+        version="0.12.1",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -247,6 +247,20 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
         data = await image_body(request)
         try:
             return await run_in_threadpool(service.save_reference, meter_id, data)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @app.post("/api/meters/{meter_id}/recognition-reference", dependencies=[Depends(admin)])
+    async def recognition_reference(
+        meter_id: str, request: Request,
+        region: Annotated[int, Query(ge=0, le=11)],
+        value: Annotated[float, Query(ge=0, lt=10)],
+        uncertainty: Annotated[float, Query(ge=0, le=.49)] = 0,
+    ):
+        config(meter_id)
+        data = await image_body(request)
+        try:
+            return await run_in_threadpool(service.save_visual_reference, meter_id, region, value, uncertainty, data)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
 

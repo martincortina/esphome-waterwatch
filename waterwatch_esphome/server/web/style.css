@@ -35,3 +35,5 @@ body[data-workspace-view=capture] .stats small{display:none}body[data-workspace-
 body[data-selected-region-kind=analog] #calibrationTools>.roi-frame-tools{display:none}
 
 body[data-workspace-view=capture][data-has-baseline=false] #cameraCapture{display:none}@media(max-width:760px){body[data-workspace-view=capture] .stats article:nth-child(2),body[data-workspace-view=capture] .stats article:nth-child(3),body[data-workspace-view=capture] .status-group,body[data-workspace-view=capture] #captureStatus{display:none}body[data-workspace-view=capture] .result-card .result-advice{font-size:11px}body[data-workspace-view=capture] #resultConfidence{font-size:11px}}
+
+.digit-result.reference_verified,.digit-result.analog_position_verified,.digit-result.analog_verified{border-top-color:var(--accent)}
