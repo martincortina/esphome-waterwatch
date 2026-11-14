@@ -1,4 +1,4 @@
-# Python 3.12 production snapshot; OCR runtime additions pinned 2026-11-04.
+# Python 3.12 production snapshot; OCR runtime additions pinned 2026-11-14.
 # The pinned PP-OCR asset is downloaded and verified during the image build only.
 # No trained OCR weights are downloaded at runtime. Tesseract remains available by apt.
 annotated-doc==0.0.5
@@ -27,3 +27,7 @@ flatbuffers==25.12.19
 onnxruntime==1.31.1
 packaging==26.3
 protobuf==7.36.2
+ai-edge-litert==2.3.0
+backports.strenum==1.2.8
+tqdm==4.70.1
+ml_dtypes==0.6.0

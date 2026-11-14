@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0
+
+- Guide camera setup through photo, digit adjustment and a non-recording check.
+- Fold calibration tools and model details away; add direct per-digit adjustment.
+- Add opt-in last-decimal phase recognition with carry guards and two-view support.
+- Make reading precision an explicit litre-unit choice. Preserve existing modes.
+- Include model attribution and its separate private/non-commercial license.
+- Fresh mounted-meter accuracy is not yet verified for this release.
+
 ## 0.10.0
 
 - Add a pinned local PP-OCRv5 Latin model with five normalized counter views.

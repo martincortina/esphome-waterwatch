@@ -31,7 +31,7 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
 - Native ESPHome camera transport through HA; images remain on your own host.
 - Optional brief LED illumination for each preview or OCR reading; LED off between
   captures, with device-side timeout and host cleanup. No continuous light required.
-- Compact ingress workshop with dark/light/system themes, digit regions, zoom,
+- Guided photo / digit setup / reading check with dark/light/system themes, digit regions, zoom,
   static perspective correction, dry-run OCR and a dedicated history view.
 - Quarter turns and fine-angle straightening, saved per meter and applied before
   OCR crops the digits. Original camera images stay unchanged.
@@ -48,6 +48,8 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
 - Editable/removable alignment landmarks with Undo/Redo and numeric positioning.
 - Confirmed reading-log deletion retains the current verified counter and removes
   attached captures; previous Home Assistant statistics remain unchanged.
+- Optional last-decimal wheel phase model handles intermediate positions with carry
+  guards (experimental; separate private/non-commercial model license).
 - Optional lower decimal precision keeps a rolling final wheel visible while
   excluding its uncertain digit from consumption readings.
 - Local PP-OCRv5 English and Latin models compare colour-normalized counter views,
@@ -56,8 +58,8 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
 - SQLite history, explicit baseline/corrections, image quality and plausibility checks.
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 
-**Experimental:** this uses a general English text model on the HA host. It has no
-trained analog-pointer or wheel-transition recognizer. Landmark alignment and
+**Experimental:** text OCR and optional last-decimal phase recognition run on the HA
+host. Coupled carries and analog pointers remain unsupported. Landmark alignment and
 recognition scores do not establish real meter accuracy. Unclear digits stay rejected.
 Test and calibrate your actual meter before enabling publication.
 
@@ -78,6 +80,8 @@ docker build -t waterwatch-esphome:dev ./waterwatch_esphome
 Tests use synthetic fixtures; native Tesseract and a live MQTT broker are separate
 checks. Run the commands above to validate changes locally.
 
-Application code is MIT licensed. Builds download a SHA-256-pinned PP-OCRv5 English
-model under Apache-2.0; it runs without runtime model downloads. No meter photos
+Application code is MIT licensed. Builds download pinned PP-OCRv5 text models under
+Apache-2.0 and a separate jomjol wheel-phase model for private, non-commercial use.
+See models/README.md and THIRD_PARTY_NOTICES.md for attribution and model terms.
+There are no runtime model downloads. No meter photos
 are published. See [third-party notices](THIRD_PARTY_NOTICES.md).

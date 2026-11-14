@@ -18,6 +18,7 @@ const reasons = {
   baseline_required:"Baseline required", manual_baseline:"Verified manually", roi_not_configured:"Set digit regions",
   roi_outside_image:"A rotated digit box extends outside the image. Adjust its angle, size or position",
   ambiguous_digit:"Ambiguous digit", poor_image_quality:"Image needs adjustment", unreadable:"Unreadable",
+  rolling_verified:"Rolling · verified", rolling_uncertain:"Wheel needs review",
   camera_unavailable:"Camera unavailable", camera_repeated_frame:"Repeated camera image",
   flash_light_must_be_off:"Turn the meter light off before a flash capture",
   alignment_reference_missing:"Save an alignment reference before enabling alignment",
@@ -84,8 +85,10 @@ function updateControls() {
   $("clearRois").disabled = busy || !current?.config.rois.length;
   $("original").disabled = $("overlay").disabled = busy || !sourceBlob;
   $("zoom").disabled = busy || !picture;
-  $("cameraPreview").textContent = dirty ? "Save & preview" : "Preview";
-  $("cameraTest").textContent = dirty ? "Save & test OCR" : "Test OCR";
+  $("lastDecimalMode").disabled=busy||Number($("decimals").value)===0;
+  $("workflowPhoto").disabled=$("workflowTest").disabled=busy||!fromHa;
+  $("cameraPreview").textContent = dirty ? "Save & take photo" : "Take photo";
+  $("cameraTest").textContent = dirty ? "Save & check reading" : "Check reading";
   for (const id of ["rotateLeft","rotateRight","rotation","rotationSlider","resetRotation"]) $(id).disabled = busy || !current;
   updateDigitControls();
   updateLogControls();
@@ -114,6 +117,8 @@ function renderConfig() {
   $("scheduledCapture").checked = cfg.source.enabled; $("flashEnabled").checked = Boolean(cfg.source.flash);
   $("rotation").value = $("rotationSlider").value = cfg.rotation_degrees ?? 0;
   $("ignoredDecimals").value=cfg.ignored_decimal_digits;$("ignoredDecimals").max=cfg.decimal_places;
+  $("lastDecimalMode").value=cfg.last_decimal_mode||"text";
+  renderPrecision();
   $("rotationStatus").textContent = `${cfg.rotation_degrees || 0}° · Clockwise +`;
   $("alignmentEnabled").checked=cfg.alignment.enabled;
   $("alignmentScore").value=cfg.alignment.min_score;$("alignmentSearch").value=cfg.alignment.search_margin*100;$("alignmentAngle").value=cfg.alignment.max_angle_degrees;
@@ -121,10 +126,35 @@ function renderConfig() {
   renderChoices("flashEntity", flashLights, cfg.source.flash?.light_entity, "Select the meter’s ESPHome light");
   sourceControls(); updateRegionCount();
 }
+function renderPrecision() {
+  const decimals=Math.max(0,Math.min(6,Number($("decimals").value)||0));
+  const excluded=Math.min(decimals,Number($("ignoredDecimals").value)||0);
+  $("ignoredDecimals").value=excluded;
+  $("readingPrecision").replaceChildren(...Array.from({length:decimals+1},(_,n)=>new Option(`${(1000*10**-(decimals-n)).toLocaleString(undefined,{maximumFractionDigits:3})} L${n===0?" · all digits":` · skip last ${n}`}`,String(n))));
+  $("readingPrecision").value=String(excluded);
+  $("precisionHelp").textContent=excluded?`The last ${excluded} decimal wheel${excluded>1?"s are":" is"} shown for inspection but excluded from readings. This changes precision, not OCR confidence.`:"Every decimal wheel must be verified. No wheel is skipped.";
+  $("lastDecimalMode").disabled=busy||decimals===0;
+}
+function setCalibration(open) {
+  if(!open){selectedDigit=-1;digitDrag=null;}
+  $("calibrationTools").hidden=!open;
+  $("toggleCalibration").setAttribute("aria-expanded",String(open));
+  $("toggleCalibration").textContent=open?"Hide digit setup":"Adjust photo & digits";
+  $("workflowDigits").classList.toggle("active",open);
+  renderDigitSelection();drawPreview();
+  requestAnimationFrame(resizePreview);
+}
+$("toggleCalibration").onclick=()=>setCalibration($("calibrationTools").hidden);
+$("finishCalibration").onclick=()=>{setCalibration(false);$("cameraTest").focus();};
+$("workflowPhoto").onclick=()=>$("cameraPreview").click();
+$("workflowTest").onclick=()=>$("cameraTest").click();
+$("workflowDigits").onclick=()=>{setCalibration(true);$("calibrationTools").scrollIntoView({block:"start"});};
+$("readingPrecision").addEventListener("change",()=>{$("ignoredDecimals").value=$("readingPrecision").value;renderPrecision();setDirty();});
 function editedConfig() {
   const cfg = structuredClone(current.config);
   cfg.decimal_places = Number($("decimals").value); cfg.min_confidence = Number($("threshold").value);
   cfg.ignored_decimal_digits=Number($("ignoredDecimals").value);
+  cfg.last_decimal_mode=$("lastDecimalMode").value;
   cfg.max_rate_lph = Number($("maxRate").value); cfg.camera.interval_seconds = Number($("interval").value);
   cfg.camera.led_duty = Number($("led").value); cfg.camera.resolution = $("resolution").value;
   cfg.rotation_degrees = Number($("rotation").value);
@@ -169,18 +199,19 @@ function updateHint() {
   const cfg = current.config; let text, action, target;
   if (cfg.source.kind !== "home_assistant" || !cfg.source.camera_entity) { text = "1. Connect your meter camera, then preview the image."; action = "Choose camera"; target = "camera"; }
   else if (!cfg.rois.length) { text = "2. Preview the meter, then draw a box around each digit."; action = "Preview camera"; target = "preview"; }
-  else if (current.state.total_m3 === null) { text = "3. Test recognition, then enter the reading verified on the physical meter."; action = "Set baseline"; target = "baseline"; }
+  else if (current.state.total_m3 === null) { text = "3. Check recognition before setting a verified baseline in History."; action = "Check reading"; target = "test"; }
   else { text = cfg.source.enabled ? `Automatic readings every ${cfg.camera.interval_seconds}s${cfg.source.flash ? " · Flash enabled" : ""}.` : "Test the camera reading. Enable automatic readings when calibration is reliable."; action = ""; target = ""; }
   $("setupHintText").textContent = text; $("setupHintAction").textContent = action; $("setupHintAction").hidden = !action; $("setupHintAction").dataset.target = target;
 }
 $("setupHintAction").onclick = () => {
   const target = $("setupHintAction").dataset.target;
+  if(target === "test") { $("cameraTest").click(); return; }
   if (target === "baseline") { showView("history"); $("baselinePanel").open = true; $("manualValue").focus(); }
   else { showView("capture"); if (target === "camera") { $("cameraSettings").open = true; $("sourceKind").focus(); } else $("cameraPreview").click(); }
 };
 function updateRegionCount() { $("roiCount").textContent = `${current?.config.rois.length || 0} regions`; renderDigitSelection(); }
 function baseEditorReady() { return Boolean(current && picture && !busy && !transformPending && !showingOriginal && !jsonDraft && JSON.stringify(current.config.perspective) === JSON.stringify(savedConfig?.perspective)); }
-function digitEditorReady() { return baseEditorReady() && digitMode!=="landmark" && landmarkTarget===null && (!current.config.alignment?.enabled && !savedConfig?.alignment?.enabled || JSON.stringify(editedConfig().alignment)===JSON.stringify(savedConfig?.alignment)); }
+function digitEditorReady() { return !$("calibrationTools").hidden && baseEditorReady() && digitMode!=="landmark" && landmarkTarget===null && (!current.config.alignment?.enabled && !savedConfig?.alignment?.enabled || JSON.stringify(editedConfig().alignment)===JSON.stringify(savedConfig?.alignment)); }
 function landmarkEditorReady() { return baseEditorReady() && !$("alignmentEnabled").checked && !savedConfig?.alignment?.enabled && sourceBlob===referenceSource && referenceSourceId===current.config.alignment?.reference_id; }
 function updateDigitControls() {
   const ready=digitEditorReady(), count=current?.config.rois.length || 0;
@@ -548,7 +579,7 @@ async function renderMeter() {
   $("rssi").textContent = state.rssi === null ? (current.config.source.kind === "home_assistant" ? "Home Assistant camera" : "Waiting for an image") : `Wi-Fi ${state.rssi} dBm`;
   $("captureStatus").textContent = readable(current.capture_status?.status || "not_captured");
   renderConfig(); updateHint();
-  if (layoutMeterId !== selected()) { const compact = window.matchMedia("(max-width: 760px)").matches; $("cameraSettings").open = !compact || !current.config.source.camera_entity; $("recognitionSettings").open = !compact; layoutMeterId = selected(); }
+  if (layoutMeterId !== selected()) { $("cameraSettings").open = !current.config.source.camera_entity; $("recognitionSettings").open = !current.config.rois.length; setCalibration(!current.config.rois.length); layoutMeterId = selected(); }
   await loadImage(); historyRows = await (await api(`/api/meters/${selected()}/history`)).json(); renderHistory();
 }
 async function refresh() {
@@ -561,6 +592,7 @@ async function refresh() {
   $("connection").className=`status-chip ${status.ocr_available?"good":"warn"}`;
   await renderMeter();
 }
+function reviewDigit(index) { showView("capture");setCalibration(true);selectedDigit=index;renderDigitSelection();drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true}); }
 function clearDiagnostics() { for(const url of diagnosticUrls)URL.revokeObjectURL(url);diagnosticUrls=[];lastTest=null;$("exampleLabel").value="";$("exportTest").disabled=true;$("digitResults").replaceChildren();$("digitDiagnostics").hidden=true;$("resultCard").hidden=true;$("testResult").textContent="";$("processed").hidden=true;if($("processed").dataset.url){URL.revokeObjectURL($("processed").dataset.url);$("processed").dataset.url="";$("processed").removeAttribute("src");} }
 function imageBlob(payload) { const bytes=Uint8Array.from(atob(payload.base64),c=>c.charCodeAt(0));return new Blob([bytes],{type:payload.mime}); }
 function diagnosticImage(payload,alt) { const img=document.createElement("img");img.alt=alt;const url=URL.createObjectURL(imageBlob(payload));diagnosticUrls.push(url);img.src=url;return img; }
@@ -575,6 +607,11 @@ async function renderResult(result, testOnly) {
   const digits=result.details?.digits || [],used=digits.filter(d=>d.used_for_reading!==false),agreed=used.filter(d=>d.recognitions?.[0]?.[0]!==null && d.recognitions?.[0]?.[0]===d.recognitions?.[1]?.[0] && d.recognitions?.length===2);
   const minimum=agreed.length?Math.min(...agreed.map(d=>Math.min(...d.recognitions.map(r=>r[1])))):null;
   $("resultConfidence").textContent=digits.length?`${agreed.length}/${used.length} used digits agreed${minimum===null?"":` · Lowest agreed score ${(minimum*100).toFixed(1)}%`}${result.details?.ignored_decimal_digits?` · ${result.details.resolution_litres} L resolution`:""}${testOnly?" · History unchanged":""}`:`${((result.confidence||0)*100).toFixed(1)}% confidence${testOnly?" · History unchanged":""}`;
+  const problem=used.find(d=>!["agreed","rolling_verified"].includes(d.status));
+  $("reviewDigit").hidden=!problem;
+  if(problem){$("reviewDigit").textContent=`Review digit ${problem.digit+1}`;$("reviewDigit").onclick=()=>reviewDigit(problem.digit);}
+  const rolling=used.find(d=>d.wheel_policy);
+  $("resultAdvice").textContent=rolling?.wheel_policy==="unavailable"?"Rolling model unavailable. Rebuild the app to install its pinned model.":problem?.status==="rolling_uncertain"?"The wheel is close to a carry, the model views disagree, or support is too low. Keep full precision to wait for a clear result, or explicitly choose a larger reading unit in Digit recognition.":problem?`Digit ${problem.digit+1} needs attention. Check its box and focus.${problem.digit===digits.length-1 && !rolling?" If it is rotating, try the phase model in Digit recognition.":""}`:rolling?.wheel_policy==="transition_verified"?"The last wheel is between numbers. Two phase views support the completed digit; the next digit has not been rounded up.":"All used digits agree. Flow, baseline and timestamp checks still apply.";
   const {images,...summary}=result;$("testResult").textContent=JSON.stringify(summary,null,2);
   $("viewTestPhoto").hidden=!images?.original;
   const alignment=result.details?.alignment;
@@ -583,12 +620,17 @@ async function renderResult(result, testOnly) {
   for(const digit of digits){
     const card=document.createElement("article");card.className=`digit-result ${digit.status||""}`;
     const title=document.createElement("strong");title.textContent=`Digit ${digit.digit+1} · ${digit.used_for_reading===false?"Excluded at chosen precision":readable(digit.status||"quality check")}`;card.append(title);
-    if(digit.possible_transition){const note=document.createElement("p");note.textContent=`Possible wheel transition ${digit.possible_transition.join(" → ")}. No digit inferred.`;card.append(note);}
+    if(digit.possible_transition && digit.wheel_policy!=="transition_verified"){const note=document.createElement("p");note.textContent=`Possible wheel transition ${digit.possible_transition.join(" → ")}. No digit inferred.`;card.append(note);}
     if(images?.digits?.[digit.digit])card.append(diagnosticImage(images.digits[digit.digit],`Actual crop for digit ${digit.digit+1}`));
-    for(const [index,recognition] of (digit.recognitions||[]).entries()){const line=document.createElement("p");line.textContent=`${digit.recognition_sources?.[index]||`Pass ${index+1}`}: ${recognition[0]??"?"} · ${(recognition[1]*100).toFixed(1)}%`;card.append(line);}
-    if(digit.recognition_policy==="assisted_consensus"){const note=document.createElement("p");note.textContent="Supported by two normalized Latin-model views";card.append(note);}
-    const quality=document.createElement("p");quality.textContent=`Brightness ${Math.round(digit.brightness)} · Highlights ${Math.round((digit.highlight_fraction||0)*100)}%`;card.append(quality);
-    if(digit.quality_warnings?.length){const note=document.createElement("p");note.textContent=digit.quality_warnings.map(readable).join(" · ");card.append(note);}
+    const value=document.createElement("span");value.className="digit-value";value.textContent=digit.recognitions?.[0]?.[0] && digit.recognitions[0][0]===digit.recognitions?.[1]?.[0]?digit.recognitions[0][0]:"?";card.append(value);
+    if(digit.wheel_views?.length){const phase=document.createElement("p");phase.className="wheel-phase";phase.textContent=`Wheel position ${digit.wheel_views.map(v=>Number(v.phase).toFixed(1)).join(" / ")}${digit.wheel_policy==="transition_verified"?" · completed digit used":""}`;card.append(phase);}
+    const scores=document.createElement("details"),label=document.createElement("summary");label.textContent="Scores & image quality";scores.append(label);
+    for(const [index,recognition] of (digit.recognitions||[]).entries()){const line=document.createElement("p");line.textContent=`${digit.recognition_sources?.[index]||`Pass ${index+1}`}: ${recognition[0]??"?"} · ${(recognition[1]*100).toFixed(1)}%`;scores.append(line);}
+    if(digit.recognition_policy==="assisted_consensus" && !digit.wheel_views){const note=document.createElement("p");note.textContent="Supported by two normalized Latin-model views";scores.append(note);}
+    const quality=document.createElement("p");quality.textContent=`Brightness ${Math.round(digit.brightness)} · Highlights ${Math.round((digit.highlight_fraction||0)*100)}%`;scores.append(quality);
+    if(digit.quality_warnings?.length){const note=document.createElement("p");note.textContent=digit.quality_warnings.map(readable).join(" · ");scores.append(note);}
+    card.append(scores);
+    const edit=document.createElement("button");edit.type="button";edit.className="quiet digit-adjust";edit.textContent="Adjust box";edit.onclick=()=>reviewDigit(digit.digit);card.append(edit);
     $("digitResults").append(card);
   }
   if(images?.original){
@@ -625,7 +667,7 @@ $("newName").oninput=()=>{if(!customId)$("newId").value=$("newName").value.toLow
 $("registerForm").onsubmit=act(async()=>{if(dirty)throw new Error("Save or discard changes before adding a meter.");const data=await(await api("/api/meters",{method:"POST",body:JSON.stringify({id:$("newId").value,name:$("newName").value})})).json();$("cameraToken").textContent=`${data.config.name} upload token (shown once): ${data.camera_token}`;$("cameraToken").dataset.meter=data.config.id;await refresh();$("meter").value=data.config.id;await renderMeter();$("registration").hidden=true;showView("capture");message("Meter created. Select Home Assistant camera, then find your devices.");});
 $("save").onclick=act(()=>saveConfiguration());
 $("discard").onclick=()=>{if(!current||!savedConfig)return;current.config=structuredClone(savedConfig);resetDigitEditor();renderConfig();setDirty(false);void renderSourceImage();drawPreview();updateHint();message("Unsaved changes discarded.");};
-for(const element of document.querySelectorAll(".settings-column input, .settings-column select")){if(["selectedLandmark","landmarkX","landmarkY","landmarkW","landmarkH"].includes(element.id))continue;element.addEventListener("input",()=>{if(element.id==="decimals")$("ignoredDecimals").max=element.value;sourceControls();setDirty();});}
+for(const element of document.querySelectorAll(".settings-column input, .settings-column select")){if(["selectedLandmark","landmarkX","landmarkY","landmarkW","landmarkH"].includes(element.id))continue;element.addEventListener("input",()=>{if(element.id==="decimals")renderPrecision();sourceControls();setDirty();});}
 $("config").oninput=()=>{jsonDraft=true;setDirty();};
 $("loadJson").onclick=()=>{try{const cfg=JSON.parse($("config").value);if(cfg.id!==selected())throw new Error("Meter ID cannot change.");if(!cfg.camera||!cfg.source||!Array.isArray(cfg.rois))throw new Error("Configuration must include camera, source and digit regions.");current.config=cfg;resetDigitEditor();renderConfig();setDirty();drawPreview();void renderSourceImage();message("JSON loaded into the editor. Save to apply.");}catch(error){message(error.message,true);}};
 function point(event){const box=canvas.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(event.clientX-box.left)/box.width)),y:Math.max(0,Math.min(1,(event.clientY-box.top)/box.height))};}
@@ -742,7 +784,7 @@ $("redoRoi").onclick=()=>undoDigitEdit(true);
 $("clearRois").onclick=()=>{if(!digitEditorReady())return;const before=digitSnapshot();current.config.rois=[];selectedDigit=-1;commitDigitEdit(before);};
 $("original").onclick=act(async()=>{showingOriginal=true;await renderSourceImage();});$("overlay").onclick=act(async()=>{showingOriginal=false;await renderSourceImage();});
 $("loadCameras").onclick=act(async()=>{const camera=$("cameraEntity").value,light=$("flashEntity").value;[cameras,flashLights]=await Promise.all([api("/api/home-assistant/cameras").then(response=>response.json()),api("/api/home-assistant/flash-lights").then(response=>response.json())]);renderChoices("cameraEntity",cameras,camera,"Select a camera");renderChoices("flashEntity",flashLights,light,"Select the meter’s ESPHome light");message(cameras.length?"Devices loaded. Select your meter camera and optional flash light.":"No cameras found in Home Assistant.");});
-$("cameraPreview").onclick=act(async()=>{if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const response=await api(`/api/meters/${selected()}/camera-image`,{method:"POST"});sourceBlob=await response.blob();showingOriginal=false;await renderSourceImage();$("imageStamp").textContent="Live preview · Not recorded";$("processed").hidden=true;message("Rotate the image to level the digits, then draw one box per digit and save.");});
+$("cameraPreview").onclick=act(async()=>{if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const response=await api(`/api/meters/${selected()}/camera-image`,{method:"POST"});sourceBlob=await response.blob();showingOriginal=false;await renderSourceImage();$("imageStamp").textContent="Live preview · Not recorded";$("processed").hidden=true;message(current.config.rois.length?"Fresh photo ready. If the camera moved, open Adjust photo & digits and check every box.":"Photo ready. Open Adjust photo & digits, straighten the row and add one box per digit.");});
 async function captureCamera(testOnly){if(dirty)await saveConfiguration(false);if(!selected())throw new Error("Add a meter and select its camera first.");const result=await(await api(`/api/meters/${selected()}/capture?test_only=${testOnly}&include_images=true`,{method:"POST"})).json();if(!testOnly)await refresh();await renderResult(result,testOnly);$("captureStatus").textContent=testOnly?"Test complete · Not recorded":"Capture recorded";message(testOnly?"Test complete. The photo and available diagnostics are shown. History is unchanged.":"Capture recorded. Review its result in History.");}
 $("cameraTest").onclick=act(()=>captureCamera(true));
 $("cameraCapture").onclick=act(async()=>{if(dirty)throw new Error("Save configuration before recording a reading.");await captureCamera(false);});

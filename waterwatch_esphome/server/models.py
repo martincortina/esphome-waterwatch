@@ -113,6 +113,7 @@ class MeterConfig(StrictModel):
     rois: list[ROI] = Field(default_factory=list, max_length=12)
     decimal_places: int = Field(default=3, ge=0, le=6)
     ignored_decimal_digits: int = Field(default=0, ge=0, le=6)
+    last_decimal_mode: Literal["text", "rolling"] = "text"
     min_confidence: float = Field(default=0.85, ge=0.5, le=1)
     min_sharpness: float = Field(default=20, ge=0, le=10000)
     min_brightness: float = Field(default=20, ge=0, le=255)
@@ -135,6 +136,8 @@ class MeterConfig(StrictModel):
 
     @model_validator(mode="after")
     def layout(self):
+        if self.last_decimal_mode == "rolling" and not self.decimal_places:
+            raise ValueError("Rolling-wheel mode requires a decimal wheel")
         if self.ignored_decimal_digits > self.decimal_places:
             raise ValueError("Only decimal digits can be excluded from the reading")
         if self.rois and self.decimal_places >= len(self.rois):

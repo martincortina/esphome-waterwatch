@@ -12,6 +12,7 @@ from PIL import Image
 from server.alignment import AlignmentError, register
 from server.models import ROI, MeterConfig
 from server.neural_ocr import NeuralOCREngine, NeuralOCRError
+from server.wheel_ocr import WheelOCREngine, resolve_wheel
 
 
 @dataclass
@@ -171,9 +172,10 @@ class TesseractEngine:
 
 
 class Pipeline:
-    def __init__(self, engine=None, reference_loader=None):
+    def __init__(self, engine=None, reference_loader=None, wheel_engine=None):
         self.engine = engine or NeuralOCREngine()
         self.reference_loader = reference_loader
+        self.wheel_engine = wheel_engine or WheelOCREngine()
 
     def run(self, data: bytes, cfg: MeterConfig) -> Recognition:
         context = {}
@@ -272,7 +274,22 @@ class Pipeline:
             evidence = context.get("recognition_evidence", [])
             if index < len(evidence):
                 diagnostics[-1].update(evidence[index])
-            choices = {r[0] for r in results if r[0] is not None and r[1] >= .5}
+            raw_text = [*diagnostics[-1].get("primary_recognitions", results),
+                        *diagnostics[-1].get("assist_recognitions", [])]
+            if cfg.last_decimal_mode == "rolling" and index == len(cfg.rois)-1:
+                diagnostics[-1]["text_recognitions"] = results
+                try:
+                    views = self.wheel_engine.recognize(color)
+                    results, wheel_detail = resolve_wheel(views, results, raw_text, cfg.min_confidence)
+                    diagnostics[-1].update(wheel_detail)
+                    diagnostics[-1]["recognitions"] = results
+                    diagnostics[-1]["recognition_sources"] = ["Wheel · linear resize", "Wheel · area resize"]
+                    if wheel_detail["wheel_policy"] == "centered_digit_verified":
+                        diagnostics[-1]["recognition_sources"] = ["Text · centered wheel check"]*2
+                except (OSError, NeuralOCRError):
+                    results = [(None, 0.0), (None, 0.0)]
+                    diagnostics[-1].update(wheel_policy="unavailable", recognitions=results)
+            choices = {r[0] for r in raw_text if r[0] is not None and r[1] >= .5}
             if len(choices) == 2 and all(len(c) == 1 and c in "0123456789" for c in choices):
                 for first in sorted(choices):
                     following = str((int(first)+1) % 10)
@@ -281,6 +298,10 @@ class Pipeline:
                         break
             agreed = results[0][0] is not None and results[0][0] == results[1][0]
             diagnostics[-1]["status"] = ("agreed" if min(r[1] for r in results) >= cfg.min_confidence else "low_confidence") if agreed else "ambiguous"
+            if diagnostics[-1].get("wheel_policy") == "transition_verified":
+                diagnostics[-1]["status"] = "rolling_verified"
+            elif diagnostics[-1].get("wheel_policy") in {"uncertain", "unavailable"}:
+                diagnostics[-1]["status"] = "rolling_uncertain"
             # Require agreement between two preprocessing passes. Never guess a missing digit.
             if results[0][0] is None or results[0][0] != results[1][0]:
                 digits.append("?")
@@ -303,6 +324,7 @@ class Pipeline:
             details={**context, "digits": diagnostics, "engine": type(self.engine).__name__,
                      "full_raw_value": full_text, "ignored_decimal_digits": cfg.ignored_decimal_digits,
                      "resolution_litres": 1000 * 10**-decimals,
+                     "last_decimal_mode": cfg.last_decimal_mode,
                      "rotation_degrees": cfg.rotation_degrees},
             overlay=jpeg(overlay),
             processed=jpeg(row_result.processed if row_result is not None else np.hstack(previews)),

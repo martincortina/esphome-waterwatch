@@ -18,7 +18,7 @@ The local-ZIP method below is an alternative for manual installations.
    `waterwatch_esphome` directory in Home Assistant's `/local_apps` folder
    (`/addons` on older installations), reload the store, install, start and open its Web UI.
    Build on amd64/aarch64 with internet access for Python packages and the pinned
-   PP-OCRv5 English model. Weights are SHA-256-verified at build time; recognition
+   PP-OCRv5 text and optional wheel-phase models. Weights are SHA-256-verified at build time; recognition
    runs offline on the HA host, without model downloads at startup.
    The template folder in this source repository alone is not a complete build context;
    use the generated package, which includes the server and dependency lock.
@@ -182,15 +182,15 @@ are meter-specific. The last five references plus any older active reference are
 retained. HA add-on backups contain them; configuration JSON alone does not contain
 reference photographs. Alignment is disabled by default on existing meters.
 
-The host recognizer uses the pinned PP-OCRv5 English model. Meter-trained continuous
-wheel/carry interpretation, analog pointers, a labelled training gallery and held-out
-real-meter validation remain subsequent work.
+The default recognizer uses pinned PP-OCRv5 text models. Optional last-decimal
+phase recognition is described below. Coupled carries, analog pointers and a
+labelled training gallery remain subsequent work. New mounts need validation.
 
 ## Recognition boundaries
 
 This is host-side OpenCV/PP-OCRv5 recognition with a general English model. It supports a fixed digital wheel layout with per-digit boxes and
-optional static perspective correction. It has no trained analog-pointer reader,
-reliable half-rolled wheel interpretation. Optional landmark alignment only compensates
+optional static perspective correction. It has no trained analog-pointer reader. Last-decimal phase recognition remains
+experimental and can reject intermediate or boundary positions. Optional landmark alignment only compensates
 small rigid camera movements; it does not guarantee recognition accuracy. Recognition
 scores and two-pass agreement do not establish real meter accuracy.
 
@@ -291,3 +291,33 @@ Scores are unmodified model outputs, not calibrated probabilities. Confidence,
 quality, baseline and flow thresholds still apply. A hundred successful test frames
 qualify that reading and capture setup, not every future wheel position or lighting
 condition. Full-precision ambiguous transitions are still unresolved.
+
+## Guided setup and rolling wheel (0.11.0)
+
+Use **Take a photo > Adjust digits > Check reading**. The digit editor is folded
+away for normal use. After changing the support, take a fresh photo, open
+**Adjust photo & digits**, straighten the row and move or rotate all boxes together.
+Check each inner frame, then refresh the alignment reference and fixed landmarks
+if the camera view changed. **Done editing** closes tools; it does not save.
+**Check reading** saves pending calibration before a non-recording test.
+Per-digit cards show the crop, result, direct **Adjust box** action and expandable
+scores. Results give a next action for the first failing digit.
+
+In **Digit recognition**, choose **Rotating wheel > phase model (experimental)**
+for a smallest decimal wheel that is usually between numbers. Set decimal places
+and keep its full outer ROI visible. Two views must agree on its completed digit;
+7.5 means the wheel has completed 7 and is moving toward 8. It does not round up.
+Near a carry it also needs confident matching text OCR; uncertain results remain
+rejected. This does not infer coupled carries in the larger wheels.
+
+The phase model by jomjol / AI-on-the-edge-device has a separate private,
+non-commercial license, included in the image; commercial use needs permission
+from that project's rights holder. See `models/README.md` and the unchanged
+`server/ocr_models/AI_ON_THE_EDGE_LICENSE.txt`. WaterWatch is an independent
+integration. Models are downloaded and SHA-256-checked only at image build.
+
+**Reading precision** explicitly controls excluded decimal wheels. Choosing a
+larger litre unit can keep reliable larger digits while leaving a distorted wheel
+visible for inspection. It reduces precision rather than increasing confidence.
+Neither mode nor precision is changed automatically in an existing configuration.
+Validate fresh photos on the actual meter before relying on automatic readings.

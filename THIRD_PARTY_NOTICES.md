@@ -46,3 +46,16 @@ PaddleOCR license. Build-time download SHA-256:
 `b20bd37c168a570f583afbc8cd7925603890efbcdc000a59e22c269d160b5f5a`.
 This adds a public generic text model; no private training images or meter-specific
 reading labels are distributed.
+
+## Optional mechanical wheel phase model
+
+The image build fetches jomjol / AI-on-the-edge-device's unmodified
+`dig-class100-0182-s2_q.tflite` (commit 04fad5d3efc518c4c2ad8cd14904f1d966ac3605).
+It has its own Dual Use License v1.0 for private, non-commercial use; commercial
+use requires a separate license. It is not covered by WaterWatch's MIT license.
+The full unchanged license is in `server/ocr_models/AI_ON_THE_EDGE_LICENSE.txt`.
+Source: https://github.com/jomjol/AI-on-the-edge-device . WaterWatch's phase adapter
+is an independent implementation; it is not an upstream release.
+
+LiteRT is by Google AI Edge Authors and licensed under Apache-2.0. It is installed
+from the pinned `ai-edge-litert` Python package. See https://github.com/google-ai-edge/LiteRT .

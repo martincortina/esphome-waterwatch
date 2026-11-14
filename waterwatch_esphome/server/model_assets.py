@@ -12,6 +12,7 @@ from server.neural_ocr import (
     MODEL_SHA256,
     MODEL_URL,
 )
+from server.wheel_ocr import WHEEL_MODEL_NAME, WHEEL_MODEL_SHA256, WHEEL_MODEL_URL
 
 
 def install_asset(name, digest, url):
@@ -37,6 +38,7 @@ def install_asset(name, digest, url):
 def install():
     install_asset(MODEL_NAME, MODEL_SHA256, MODEL_URL)
     install_asset(ASSIST_MODEL_NAME, ASSIST_MODEL_SHA256, ASSIST_MODEL_URL)
+    install_asset(WHEEL_MODEL_NAME, WHEEL_MODEL_SHA256, WHEEL_MODEL_URL)
 
 
 if __name__ == "__main__":
