@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0
+
+- Add calibrated red/dark analog pointer regions with centre, zero and direction.
+  Two annular bands must agree; competing pointers and tick-boundary positions
+  remain uncertain. No new model or runtime dependency is required.
+- Start new dials as preview-only. Confirm the next decimal scale before including
+  a dial; undo restores both region geometry and decimal placement.
+- Separate Read, Setup and History. Focus the daily photo on the reading regions,
+  keep its result alongside, fold details and save controls, and add a direct
+  baseline shortcut. Check compact desktop and mobile layouts.
+- Preserve existing wheel mode, configured thresholds, history and verified totals.
+
 ## 0.11.0
 
 - Guide camera setup through photo, digit adjustment and a non-recording check.

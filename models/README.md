@@ -86,3 +86,14 @@ carry on higher wheels is not solved by this feature.
 The model and adapter still need validation on the mounted meter, including
 transitions and carries. Unit tests are policy checks, not 100-photo accuracy
 verification. Existing fixed-reading results do not qualify a new camera mount.
+
+## Analog pointers (0.12.0)
+
+Analog regions use WaterWatch's geometric OpenCV reader, with no additional model
+asset. HSV red selection or an Otsu dark mask feeds 720 angular rays in two annular
+bands (0.32–0.70 and 0.48–0.84 of the calibrated ellipse radius). Competing lobes,
+poor radial support, inconsistent angles or a near-integer boundary remain
+uncertain. These scores are geometric support, not neural probabilities. A source
+crop must be at least 32 px in both dimensions. The dial centre, zero and direction
+must be calibrated. New UI dials remain preview-only until their decimal scale is
+explicitly confirmed. Glass-reflected red shapes can prevent reliable detection.

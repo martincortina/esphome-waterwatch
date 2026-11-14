@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from server.alignment import AlignmentError, register
+from server.analog_ocr import recognize_dial
 from server.models import ROI, MeterConfig
 from server.neural_ocr import NeuralOCREngine, NeuralOCRError
 from server.wheel_ocr import WheelOCREngine, resolve_wheel
@@ -190,9 +191,16 @@ class Pipeline:
         if not cfg.rois:
             return Recognition(reason="roi_not_configured", overlay=aligned, aligned=aligned, details=context)
         row_result = None
-        if callable(getattr(self.engine, "recognize_digits", None)):
+        text_indices = [i for i, roi in enumerate(cfg.rois) if roi.kind == "digit"]
+        row_index = {index: position for position, index in enumerate(text_indices)}
+        reading_indices = [i for i, roi in enumerate(cfg.rois) if roi.include_in_reading]
+        included_digital = [i for i in reading_indices if cfg.rois[i].kind == "digit"]
+        last_digital = included_digital[-1] if included_digital else None
+        decimal_indices = set(reading_indices[-cfg.decimal_places:]) if cfg.decimal_places else set()
+        if text_indices and callable(getattr(self.engine, "recognize_digits", None)):
             colors, valid = [], []
-            for index, roi in enumerate(cfg.rois):
+            for index in text_indices:
+                roi = cfg.rois[index]
                 try:
                     color = crop_digit(image, roi)
                 except ValueError as error:
@@ -206,12 +214,14 @@ class Pipeline:
                 try:
                     row_result = self.engine.recognize_digits(colors, valid)
                     context.update(row_result.details)
+                    context["text_roi_indices"] = text_indices
                 except (OSError, NeuralOCRError):
                     return Recognition(reason="ocr_engine_failure", details=context, aligned=aligned,
                                        overlay=aligned, crops=[jpeg(color) for color in colors])
         digits, confidences, diagnostics, previews, crops = [], [], [], [], []
         poor_quality = False
-        used_count = len(cfg.rois) - cfg.ignored_decimal_digits
+        used_count = len(reading_indices) - cfg.ignored_decimal_digits
+        used_indices = reading_indices[:used_count]
         for index, roi in enumerate(cfg.rois):
             corners = digit_corners(roi, width, height)
             try:
@@ -222,8 +232,9 @@ class Pipeline:
                 return Recognition(reason=str(error), details={**context, "digit": index}, overlay=jpeg(overlay), aligned=aligned, crops=crops)
             sharpness = float(cv2.Laplacian(patch, cv2.CV_64F).var())
             brightness = float(patch.mean())
-            diagnostics.append({"digit": index, "sharpness": sharpness, "brightness": brightness,
-                                "used_for_reading": index < used_count,
+            diagnostics.append({"digit": index, "kind": roi.kind, "sharpness": sharpness, "brightness": brightness,
+                                "used_for_reading": index in used_indices,
+                                "included_in_total": roi.include_in_reading,
                                 "rotation_degrees": roi.rotation_degrees,
                                 "contrast": round(float(np.percentile(patch, 95)-np.percentile(patch, 5)), 2),
                                 "highlight_fraction": round(float(np.mean(patch >= 245)), 4),
@@ -232,8 +243,15 @@ class Pipeline:
                                 (["soft_or_blurred"] if sharpness < cfg.min_sharpness else []) +
                                 (["check_highlights"] if np.mean(patch >= 245) > .2 else [])})
             cv2.polylines(overlay, [np.rint(corners).astype(np.int32)], True, (80, 210, 80), 2)
-            inner = digit_corners(inner_frame(roi), width, height)
-            cv2.polylines(overlay, [np.rint(inner).astype(np.int32)], True, (255, 200, 114), 1)
+            if roi.kind == "analog":
+                tl, tr, _, bl = corners
+                center = tl+(tr-tl)*roi.dial.center_x+(bl-tl)*roi.dial.center_y
+                cv2.ellipse(overlay, tuple(np.rint(center).astype(int)),
+                            (round(roi.w*width*roi.dial.radius), round(roi.h*height*roi.dial.radius)),
+                            roi.rotation_degrees, 0, 360, (255, 200, 114), 1)
+            else:
+                inner = digit_corners(inner_frame(roi), width, height)
+                cv2.polylines(overlay, [np.rint(inner).astype(np.int32)], True, (255, 200, 114), 1)
             x, y = np.rint(corners.min(axis=0)).astype(int)
             cv2.putText(
                 overlay,
@@ -251,11 +269,15 @@ class Pipeline:
                 diagnostics[-1]["status"] = "poor_image_quality"
                 digits.append("?")
                 confidences.append(0)
-                poor_quality = poor_quality or index < used_count
+                poor_quality = poor_quality or index in used_indices
                 previews.append(cv2.resize(patch, (110, 150)))
                 continue
-            if row_result is not None:
-                results = row_result.results[index]
+            if roi.kind == "analog":
+                results, pointer_evidence = recognize_dial(color, roi.dial)
+                diagnostics[-1].update(pointer_evidence)
+                previews.append(cv2.resize(patch, (110, 150)))
+            elif row_result is not None:
+                results = row_result.results[row_index[index]]
             else:
                 enlarged = cv2.resize(patch, (80, 120), interpolation=cv2.INTER_CUBIC)
                 enhanced = cv2.createCLAHE(clipLimit=2, tileGridSize=(4, 4)).apply(enlarged)
@@ -272,11 +294,11 @@ class Pipeline:
                                        overlay=jpeg(overlay), aligned=aligned, crops=crops)
             diagnostics[-1]["recognitions"] = results
             evidence = context.get("recognition_evidence", [])
-            if index < len(evidence):
-                diagnostics[-1].update(evidence[index])
+            if roi.kind == "digit" and row_index[index] < len(evidence):
+                diagnostics[-1].update(evidence[row_index[index]])
             raw_text = [*diagnostics[-1].get("primary_recognitions", results),
                         *diagnostics[-1].get("assist_recognitions", [])]
-            if cfg.last_decimal_mode == "rolling" and index == len(cfg.rois)-1:
+            if cfg.last_decimal_mode == "rolling" and index == last_digital and index in decimal_indices:
                 diagnostics[-1]["text_recognitions"] = results
                 try:
                     views = self.wheel_engine.recognize(color)
@@ -298,6 +320,8 @@ class Pipeline:
                         break
             agreed = results[0][0] is not None and results[0][0] == results[1][0]
             diagnostics[-1]["status"] = ("agreed" if min(r[1] for r in results) >= cfg.min_confidence else "low_confidence") if agreed else "ambiguous"
+            if roi.kind == "analog":
+                diagnostics[-1]["status"] = "analog_verified" if agreed and min(r[1] for r in results) >= cfg.min_confidence else "analog_uncertain"
             if diagnostics[-1].get("wheel_policy") == "transition_verified":
                 diagnostics[-1]["status"] = "rolling_verified"
             elif diagnostics[-1].get("wheel_policy") in {"uncertain", "unavailable"}:
@@ -309,18 +333,18 @@ class Pipeline:
             else:
                 digits.append(results[0][0])
                 confidences.append(min(r[1] for r in results))
-        full_text = "".join(digits)
-        if cfg.decimal_places:
+        full_text = "".join(digits[i] for i in reading_indices)
+        if cfg.decimal_places and full_text:
             full_text = full_text[: -cfg.decimal_places] + "." + full_text[-cfg.decimal_places :]
-        text = "".join(digits[:used_count])
+        text = "".join(digits[i] for i in used_indices)
         decimals = cfg.decimal_places - cfg.ignored_decimal_digits
-        if decimals:
+        if decimals and text:
             text = text[:-decimals] + "." + text[-decimals:]
         readable = "?" not in text
         return Recognition(
-            raw_value=text,
-            confidence=min(confidences[:used_count]),
-            reason="poor_image_quality" if poor_quality else "candidate" if readable else "ambiguous_digit",
+            raw_value=text or None,
+            confidence=min((confidences[i] for i in used_indices), default=0),
+            reason="preview_only" if not used_indices else "poor_image_quality" if poor_quality else "candidate" if readable else "ambiguous_digit",
             details={**context, "digits": diagnostics, "engine": type(self.engine).__name__,
                      "full_raw_value": full_text, "ignored_decimal_digits": cfg.ignored_decimal_digits,
                      "resolution_litres": 1000 * 10**-decimals,

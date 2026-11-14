@@ -11,6 +11,8 @@ let selectedLogs=new Set(), pendingDeletion=null;
 const sourceSizes=new WeakMap();
 let lastTest=null;
 let referenceSource=null, referenceSourceId=null;
+let dialMark=null;
+const verifiedStatuses=new Set(["agreed","rolling_verified","analog_verified"]);
 const canvas = $("preview"), ctx = canvas.getContext("2d"), stage = $("previewStage");
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const reasons = {
@@ -19,6 +21,7 @@ const reasons = {
   roi_outside_image:"A rotated digit box extends outside the image. Adjust its angle, size or position",
   ambiguous_digit:"Ambiguous digit", poor_image_quality:"Image needs adjustment", unreadable:"Unreadable",
   rolling_verified:"Rolling · verified", rolling_uncertain:"Wheel needs review",
+  analog_verified:"Pointer · verified", analog_uncertain:"Pointer needs review", preview_only:"Preview only",
   camera_unavailable:"Camera unavailable", camera_repeated_frame:"Repeated camera image",
   flash_light_must_be_off:"Turn the meter light off before a flash capture",
   alignment_reference_missing:"Save an alignment reference before enabling alignment",
@@ -72,6 +75,7 @@ function selected() { return current?.config.id; }
 function setDirty(value = true) {
   dirty = value; $("saveState").textContent = value ? "Unsaved changes" : "All changes saved";
   $("saveState").classList.toggle("dirty", value); updateControls();
+  document.querySelector(".savebar").classList.toggle("has-changes",value);
 }
 function updateControls() {
   $("workspace").setAttribute("aria-busy", String(busy)); $("busyStatus").hidden = !busy;
@@ -87,6 +91,10 @@ function updateControls() {
   $("zoom").disabled = busy || !picture;
   $("lastDecimalMode").disabled=busy||Number($("decimals").value)===0;
   $("workflowPhoto").disabled=$("workflowTest").disabled=busy||!fromHa;
+  $("cameraCapture").disabled=busy||!fromHa||current?.state.total_m3===null;
+  document.body.dataset.hasBaseline=String(current?.state.total_m3!==null);
+  $("openBaseline").disabled=busy||!current;
+  $("openBaseline").textContent=current?.state.total_m3===null?"Set baseline":"Correct reading";
   $("cameraPreview").textContent = dirty ? "Save & take photo" : "Take photo";
   $("cameraTest").textContent = dirty ? "Save & check reading" : "Check reading";
   for (const id of ["rotateLeft","rotateRight","rotation","rotationSlider","resetRotation"]) $(id).disabled = busy || !current;
@@ -96,6 +104,7 @@ function updateControls() {
 function sourceControls() {
   const fromHa = $("sourceKind").value === "home_assistant";
   if (!fromHa) { $("scheduledCapture").checked = false; $("flashEnabled").checked = false; }
+  document.body.dataset.imageSource=fromHa?"home_assistant":"upload";
   $("haSourceFields").hidden = !fromHa; $("flashFields").hidden = !fromHa || !$("flashEnabled").checked;
   $("uploadDeviceSettings").hidden = fromHa; $("haSettingsNote").hidden = !fromHa;
   updateControls();
@@ -136,7 +145,8 @@ function renderPrecision() {
   $("lastDecimalMode").disabled=busy||decimals===0;
 }
 function setCalibration(open) {
-  if(!open){selectedDigit=-1;digitDrag=null;}
+  if(open && document.body.dataset.workspaceView!=="setup"){showView("setup");return;}
+  if(!open){selectedDigit=-1;digitDrag=null;dialMark=null;}
   $("calibrationTools").hidden=!open;
   $("toggleCalibration").setAttribute("aria-expanded",String(open));
   $("toggleCalibration").textContent=open?"Hide digit setup":"Adjust photo & digits";
@@ -144,8 +154,9 @@ function setCalibration(open) {
   renderDigitSelection();drawPreview();
   requestAnimationFrame(resizePreview);
 }
-$("toggleCalibration").onclick=()=>setCalibration($("calibrationTools").hidden);
-$("finishCalibration").onclick=()=>{setCalibration(false);$("cameraTest").focus();};
+$("toggleCalibration").onclick=()=>showView("setup");
+$("finishCalibration").onclick=()=>{showView("capture");$("cameraTest").focus();};
+$("openBaseline").onclick=()=>{showView("history");$("baselinePanel").open=true;$("baselinePanel").scrollIntoView({block:"start"});$("manualValue").focus({preventScroll:true});};
 $("workflowPhoto").onclick=()=>$("cameraPreview").click();
 $("workflowTest").onclick=()=>$("cameraTest").click();
 $("workflowDigits").onclick=()=>{setCalibration(true);$("calibrationTools").scrollIntoView({block:"start"});};
@@ -183,16 +194,19 @@ async function saveConfiguration(notify = true) {
   if (notify) message("Configuration saved.");
 }
 function showView(name) {
-  for (const key of ["capture","history"]) {
+  document.body.dataset.workspaceView=name;
+  for (const key of ["capture","setup","history"]) {
     const active = key === name;
     $(`${key}Tab`).setAttribute("aria-selected", String(active)); $(`${key}Tab`).tabIndex = active ? 0 : -1;
-    $(`${key}View`).hidden = !active;
   }
+  $("captureView").hidden=name==="history";$("historyView").hidden=name!=="history";
+  $("captureView").setAttribute("aria-labelledby",name==="setup"?"setupTab":"captureTab");
+  setCalibration(name==="setup");
   requestAnimationFrame(resizePreview);
 }
-for (const name of ["capture","history"]) {
+for (const name of ["capture","setup","history"]) {
   $(`${name}Tab`).onclick = () => showView(name);
-  $(`${name}Tab`).onkeydown = event => { if (["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) { event.preventDefault(); const next = event.key === "Home" ? "capture" : event.key === "End" ? "history" : name === "capture" ? "history" : "capture"; showView(next); $(`${next}Tab`).focus(); } };
+  $(`${name}Tab`).onkeydown = event => { if (["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) { event.preventDefault();const names=["capture","setup","history"],next=names[event.key==="Home"?0:event.key==="End"?2:(names.indexOf(name)+(event.key==="ArrowLeft"?2:1))%3];showView(next);$(`${next}Tab`).focus(); } };
 }
 function updateHint() {
   if (!current) return;
@@ -207,7 +221,7 @@ $("setupHintAction").onclick = () => {
   const target = $("setupHintAction").dataset.target;
   if(target === "test") { $("cameraTest").click(); return; }
   if (target === "baseline") { showView("history"); $("baselinePanel").open = true; $("manualValue").focus(); }
-  else { showView("capture"); if (target === "camera") { $("cameraSettings").open = true; $("sourceKind").focus(); } else $("cameraPreview").click(); }
+  else { showView("setup"); if (target === "camera") { $("cameraSettings").open = true; $("sourceKind").focus(); } else $("cameraPreview").click(); }
 };
 function updateRegionCount() { $("roiCount").textContent = `${current?.config.rois.length || 0} regions`; renderDigitSelection(); }
 function baseEditorReady() { return Boolean(current && picture && !busy && !transformPending && !showingOriginal && !jsonDraft && JSON.stringify(current.config.perspective) === JSON.stringify(savedConfig?.perspective)); }
@@ -215,7 +229,7 @@ function digitEditorReady() { return !$("calibrationTools").hidden && baseEditor
 function landmarkEditorReady() { return baseEditorReady() && !$("alignmentEnabled").checked && !savedConfig?.alignment?.enabled && sourceBlob===referenceSource && referenceSourceId===current.config.alignment?.reference_id; }
 function updateDigitControls() {
   const ready=digitEditorReady(), count=current?.config.rois.length || 0;
-  $("editDigits").disabled=!baseEditorReady(); $("addDigit").disabled=!baseEditorReady() || count>=12;
+  $("editDigits").disabled=!baseEditorReady(); $("addDigit").disabled=$("addAnalog").disabled=!baseEditorReady() || count>=12;
   $("drawDigitFrame").disabled=!ready;
   $("selectedDigit").disabled=!ready || !count;
   $("deleteDigit").disabled=!ready || selectedDigit<0 || selectedDigit>=count;
@@ -228,8 +242,12 @@ function updateDigitControls() {
   $("exportTest").disabled=busy || !lastTest;
   $("editDigits").classList.toggle("active",digitMode==="edit"); $("addDigit").classList.toggle("active",digitMode==="add");
   $("editDigits").setAttribute("aria-pressed",String(digitMode==="edit")); $("addDigit").setAttribute("aria-pressed",String(digitMode==="add"));
+  $("addAnalog").classList.toggle("active",digitMode==="add_analog");$("addAnalog").setAttribute("aria-pressed",String(digitMode==="add_analog"));
   $("digitHelp").textContent=digitMode==="add" ? ($("drawDigitFrame").value==="inner" ? "Draw tightly around the complete digit. The outer OCR frame adds 20% margins on all sides. Leave room around the digit near photo edges." : "Draw the outer OCR crop. Its dashed inner 60% should fit the complete digit, with 20% margins on each side.") : "Fit each complete digit inside its dashed inner 60%. Move or resize the solid outer crop, or use the round handle to rotate. Numbers define reading order.";
   if($("editGroup").checked && digitMode==="edit")$("digitHelp").textContent="All digit boxes: drag any box to move the group, or use the angle controls to rotate it. Uncheck to resize one digit.";
+  if(current?.config.rois[selectedDigit]?.kind==="analog"&&digitMode==="edit")$("digitHelp").textContent="Fit the dial circle to the numbered scale, mark its pivot and zero, then choose pointer colour and direction. Preview-only dials do not change the total.";
+  if(digitMode==="add_analog")$("digitHelp").textContent="Draw around the complete numbered dial. Mark its centre and the 0 tick next. The dial starts in preview-only mode.";
+  if(dialMark)$("digitHelp").textContent=dialMark==="center"?"Click the exact pointer pivot. Press Escape to cancel.":"Click the 0 tick on the dial scale. Press Escape to cancel.";
   if(landmarkTarget!==null)$("digitHelp").textContent=`Draw a box around fixed landmark ${landmarkTarget+1}. Use a stationary, distinctive mark; Escape cancels.`;
   else if(digitMode==="landmark")$("digitHelp").textContent="Select a blue landmark to move or resize it. Delete removes it; Undo restores it. Enable automatic alignment and save after marking two fixed landmarks.";
   canvas.style.cursor=landmarkTarget!==null && baseEditorReady()?"crosshair":digitCursor(digitDrag);
@@ -251,15 +269,16 @@ function renderDigitSelection() {
   const count=current?.config.rois.length || 0;
   if(selectedDigit>=count) selectedDigit=count-1;
   const select=$("selectedDigit");
-  if(select.options.length!==count+1) select.replaceChildren(new Option("Select a digit","-1"),...Array.from({length:count},(_,index)=>new Option(`Digit ${index+1}`,String(index))));
-  select.value=String(selectedDigit); $("digitSelection").textContent=selectedDigit<0?"No digit selected":`Digit ${selectedDigit+1} selected`;
+  select.replaceChildren(new Option("Select a region","-1"),...(current?.config.rois||[]).map((roi,index)=>new Option(`${roi.kind==="analog"?"Dial":"Digit"} ${index+1}`,String(index))));
+  select.value=String(selectedDigit); $("digitSelection").textContent=selectedDigit<0?"No region selected":`${current.config.rois[selectedDigit].kind==="analog"?"Dial":"Digit"} ${selectedDigit+1} selected`;
   if(document.activeElement!==$("digitAngle"))$("digitAngle").value=current?.config.rois[selectedDigit]?.rotation_degrees || 0;
   for(const [id,key] of [["digitX","x"],["digitY","y"],["digitW","w"],["digitH","h"]])if(document.activeElement!==$(id))$(id).value=Number(((current?.config.rois[selectedDigit]?.[key]||0)*100).toFixed(4));
+  renderAnalogEditor();
   updateDigitControls();
 }
-function resetDigitEditor() { selectedDigit=-1;selectedLandmark=-1;landmarkTarget=null;$("editGroup").checked=false;digitDrag=null;startPoint=null;draftPoint=null;digitUndo=[];digitRedo=[];digitMode=current?.config.rois.length?"edit":"add";renderDigitSelection(); }
-function digitSnapshot() { return {rois:structuredClone(current.config.rois),alignment:structuredClone(current.config.alignment),selected:selectedDigit,landmark:selectedLandmark,mode:digitMode}; }
-function restoreDigitSnapshot(snapshot) { current.config.rois=structuredClone(snapshot.rois);current.config.alignment=structuredClone(snapshot.alignment);$("alignmentEnabled").checked=current.config.alignment.enabled;selectedDigit=snapshot.selected;selectedLandmark=snapshot.landmark;digitMode=snapshot.mode;landmarkTarget=null;digitDrag=null;startPoint=null;draftPoint=null; }
+function resetDigitEditor() { dialMark=null;selectedDigit=-1;selectedLandmark=-1;landmarkTarget=null;$("editGroup").checked=false;digitDrag=null;startPoint=null;draftPoint=null;digitUndo=[];digitRedo=[];digitMode=current?.config.rois.length?"edit":"add";renderDigitSelection(); }
+function digitSnapshot() { return {rois:structuredClone(current.config.rois),alignment:structuredClone(current.config.alignment),decimals:Number($("decimals").value),ignored:Number($("ignoredDecimals").value),selected:selectedDigit,landmark:selectedLandmark,mode:digitMode}; }
+function restoreDigitSnapshot(snapshot) { current.config.rois=structuredClone(snapshot.rois);current.config.alignment=structuredClone(snapshot.alignment);$("decimals").value=current.config.decimal_places=snapshot.decimals;$("ignoredDecimals").value=current.config.ignored_decimal_digits=snapshot.ignored;renderPrecision();$("alignmentEnabled").checked=current.config.alignment.enabled;selectedDigit=snapshot.selected;selectedLandmark=snapshot.landmark;digitMode=snapshot.mode;landmarkTarget=null;dialMark=null;digitDrag=null;startPoint=null;draftPoint=null; }
 function digitEditChanged() {
   $("config").value=JSON.stringify(editedConfig(),null,2);
   $("resultCard").hidden=true; $("testResult").textContent=""; $("processed").hidden=true;
@@ -278,14 +297,19 @@ function undoDigitEdit(redo=false) {
 }
 function deleteSelectedDigit() {
   if(!digitEditorReady() || !current.config.rois[selectedDigit])return;
-  const before=digitSnapshot();current.config.rois.splice(selectedDigit,1);selectedDigit=Math.min(selectedDigit,current.config.rois.length-1);commitDigitEdit(before);
+  const before=digitSnapshot(),roi=current.config.rois[selectedDigit];
+  if(roi.kind==="analog"&&roi.include_in_reading!==false){
+    if(current.config.rois.slice(selectedDigit+1).some(r=>r.include_in_reading!==false)||Number($("decimals").value)<1){message("Remove only the last included decimal dial, or adjust the reading layout first.",true);return;}
+    $("decimals").value=current.config.decimal_places=Number($("decimals").value)-1;$("ignoredDecimals").value=current.config.ignored_decimal_digits=Math.min(Number($("ignoredDecimals").value),Number($("decimals").value));renderPrecision();
+  }
+  current.config.rois.splice(selectedDigit,1);selectedDigit=Math.min(selectedDigit,current.config.rois.length-1);commitDigitEdit(before);
 }
 function minimumDigitSize() { return {w:Math.min(1,9/canvas.width),h:Math.min(1,9/canvas.height)}; }
-function digitSize() { return {width:canvas.width,height:canvas.height}; }
+function digitSize() { return {width:picture?.width||canvas.width,height:picture?.height||canvas.height}; }
 function digitRotationHandle(roi) { const box=canvas.getBoundingClientRect();return RoiGeometry.rotationHandle(roi,25*canvas.height/Math.max(1,box.height),digitSize()); }
 function digitHit(point) { const box=canvas.getBoundingClientRect(),radius=window.matchMedia("(pointer: coarse)").matches?13:8,roi=current.config.rois[selectedDigit],group=$("editGroup").checked;return RoiGeometry.hitTest(current.config.rois,point,{x:radius/box.width,y:radius/box.height},group?-1:selectedDigit,digitSize(),!group&&roi?digitRotationHandle(roi):null); }
 function digitCursor(hit) {
-  if(!digitEditorReady())return "default";if(digitMode==="add")return "crosshair";if(!hit)return "default";
+  if(!digitEditorReady())return "default";if(digitMode.startsWith("add")||dialMark)return "crosshair";if(!hit)return "default";
   if(hit.handle==="move")return "move";if(hit.handle==="rotate")return "grab";
   const angles={e:0,se:45,s:90,sw:135,w:180,nw:225,n:270,ne:315};
   return ["ew-resize","nwse-resize","ns-resize","nesw-resize"][((Math.round((angles[hit.handle]+(current.config.rois[hit.index]?.rotation_degrees||0))/45)%4)+4)%4];
@@ -305,7 +329,8 @@ $("digitRotateLeft").onclick=()=>changeDigitRotation((((current.config.rois[sele
 $("digitRotateRight").onclick=()=>changeDigitRotation((((current.config.rois[selectedDigit]?.rotation_degrees||0)+90+540)%360)-180);
 $("digitResetAngle").onclick=()=>changeDigitRotation(0);
 $("editDigits").onclick=()=>{digitMode="edit";drawPreview();};
-$("addDigit").onclick=()=>{digitMode="add";drawPreview();};
+$("addDigit").onclick=()=>{digitMode="add";drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true});};
+$("addAnalog").onclick=()=>{digitMode="add_analog";dialMark=null;selectedDigit=-1;drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true});message("Draw a box around the whole dial, including its numbered scale.");};
 $("drawDigitFrame").onchange=()=>drawPreview();
 $("selectedDigit").onchange=()=>{selectedDigit=Number($("selectedDigit").value);digitMode="edit";drawPreview();};
 $("deleteDigit").onclick=deleteSelectedDigit;
@@ -316,8 +341,47 @@ $("applyDigitGeometry").onclick=()=>{
   if(roi.w<minimum.w || roi.h<minimum.h || !RoiGeometry.inside(roi,digitSize())){message("Keep the full rotated box inside the image and at least 9 image pixels wide/high.",true);return;}
   const before=digitSnapshot();current.config.rois[selectedDigit]=roi;commitDigitEdit(before);
 };
-$("duplicateDigit").onclick=()=>{if(!digitEditorReady() || !current.config.rois[selectedDigit] || current.config.rois.length>=12)return;const before=digitSnapshot(),copy=RoiGeometry.move(current.config.rois[selectedDigit],.01,.01,digitSize());current.config.rois.splice(selectedDigit+1,0,copy);selectedDigit++;commitDigitEdit(before);};
+$("duplicateDigit").onclick=()=>{if(!digitEditorReady() || !current.config.rois[selectedDigit] || current.config.rois.length>=12)return;const before=digitSnapshot(),copy=RoiGeometry.move(current.config.rois[selectedDigit],.01,.01,digitSize());if(copy.kind==="analog")copy.include_in_reading=false;current.config.rois.splice(selectedDigit+1,0,copy);selectedDigit++;commitDigitEdit(before);};
 $("editGroup").onchange=()=>{if($("editGroup").checked && selectedDigit<0)selectedDigit=0;drawPreview();};
+function renderAnalogEditor() {
+  const roi=current?.config.rois[selectedDigit],analog=roi?.kind==="analog";
+  $("analogEditor").hidden=!analog;document.body.dataset.regionSelected=String(selectedDigit>=0);document.body.dataset.selectedRegionKind=analog||digitMode==="add_analog"?"analog":"digit";
+  if(!analog)return;
+  const dial=roi.dial||DialTools.defaults();
+  for(const [id,value] of Object.entries({dialColor:dial.pointer_color,dialDirection:dial.clockwise?"cw":"ccw",dialZero:dial.zero_angle_degrees,dialRadius:dial.radius*100,dialCenterX:dial.center_x*100,dialCenterY:dial.center_y*100}))if(document.activeElement!==$(id))$(id).value=Number.isFinite(value)?Number(value.toFixed(3)):value;
+  $("dialIncluded").checked=roi.include_in_reading!==false;
+  $("analogPlacement").textContent=roi.include_in_reading===false?"Preview only · total unchanged":"Included at configured precision";
+  const included=current.config.rois.filter(r=>r.include_in_reading!==false),position=included.indexOf(roi);
+  const exponent=position<0?-Number($("decimals").value)-1:included.length-Number($("decimals").value)-1-position;
+  const step=10**exponent;
+  $("dialStep").placeholder=`Confirm ${step.toFixed(Math.max(0,-exponent))} m³ per step`;
+  $("dialStep").readOnly=position>=0;
+  if(position>=0)$("dialStep").value=step.toFixed(Math.max(0,-exponent));
+  else if($("dialStep").dataset.region!==String(selectedDigit))$("dialStep").value="";
+  $("dialStep").dataset.region=String(selectedDigit);
+}
+function updateDial() {
+  const roi=current?.config.rois[selectedDigit];if(!digitEditorReady()||roi?.kind!=="analog")return;
+  const next={center_x:Number($("dialCenterX").value)/100,center_y:Number($("dialCenterY").value)/100,radius:Number($("dialRadius").value)/100,zero_angle_degrees:Number($("dialZero").value),clockwise:$("dialDirection").value==="cw",pointer_color:$("dialColor").value};
+  if(!DialTools.valid(next)){message("Keep the dial circle inside its box and use a zero angle from 0° to below 360°.",true);renderAnalogEditor();return;}
+  const before=digitSnapshot();roi.dial=next;commitDigitEdit(before);
+}
+for(const id of ["dialColor","dialDirection","dialZero","dialRadius","dialCenterX","dialCenterY"])$(id).addEventListener("change",updateDial);
+$("markDialCenter").onclick=()=>{dialMark="center";drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true});};
+$("markDialZero").onclick=()=>{dialMark="zero";drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true});};
+$("dialIncluded").onchange=()=>{
+  const roi=current?.config.rois[selectedDigit];if(!digitEditorReady()||roi?.kind!=="analog")return;
+  const before=digitSnapshot();
+  try{
+    let layout;
+    if($("dialIncluded").checked)layout=DialTools.includePlan(editedConfig(),selectedDigit,$("dialStep").value);
+    else{
+      if(current.config.rois.slice(selectedDigit+1).some(r=>r.include_in_reading!==false)||Number($("decimals").value)<1)throw new Error("Only the last decimal dial can be removed from the total here.");
+      layout={decimal_places:Number($("decimals").value)-1,ignored_decimal_digits:Math.min(Number($("ignoredDecimals").value),Number($("decimals").value)-1)};
+    }
+    roi.include_in_reading=$("dialIncluded").checked;$("decimals").value=current.config.decimal_places=layout.decimal_places;$("ignoredDecimals").value=current.config.ignored_decimal_digits=layout.ignored_decimal_digits;renderPrecision();commitDigitEdit(before);
+  }catch(error){$("dialIncluded").checked=roi.include_in_reading!==false;message(error.message,true);}
+};
 $("alignmentEnabled").addEventListener("input",()=>{if(current){current.config.alignment.enabled=$("alignmentEnabled").checked;drawPreview();}});
 $("saveReference").onclick=act(async()=>{
   if(!sourceBlob || showingOriginal)throw new Error("Preview the photo first.");
@@ -354,7 +418,7 @@ $("applyLandmarkGeometry").onclick=()=>{
 };
 function resizePreview() {
   if ($("captureView").hidden) return;
-  const zoom = Number($("zoom").value) / 100;
+  const zoom = document.body.dataset.workspaceView==="capture"?1:Number($("zoom").value) / 100;
   const fit = Math.min((stage.clientWidth - 20) / canvas.width, (stage.clientHeight - 20) / canvas.height);
   if (fit <= 0) return;
   canvas.style.width = `${Math.floor(canvas.width * fit * zoom)}px`; canvas.style.height = `${Math.floor(canvas.height * fit * zoom)}px`;
@@ -363,8 +427,24 @@ function resizePreview() {
 new ResizeObserver(drawPreview).observe(stage);
 $("zoom").oninput = drawPreview;
 function drawPreview() {
+  let crop=null;
+  if(picture&&current?.config.rois.length&&document.body.dataset.workspaceView==="capture"&&!showingOriginal&&!transformPending){
+    const size=digitSize(),points=current.config.rois.flatMap(roi=>RoiGeometry.corners(roi,size)),xs=points.map(p=>p.x*size.width),ys=points.map(p=>p.y*size.height),left=Math.min(...xs),right=Math.max(...xs),top=Math.min(...ys),bottom=Math.max(...ys),px=Math.max(15,(right-left)*.06),py=Math.max(20,(bottom-top)*.18);
+    const x=Math.max(0,Math.floor(left-px)),y=Math.max(0,Math.floor(top-py));crop={x,y,w:Math.min(size.width,Math.ceil(right+px))-x,h:Math.min(size.height,Math.ceil(bottom+py))-y};
+  }
+  if(picture){const w=crop?.w||picture.width,h=crop?.h||picture.height;if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;}
   resizePreview();
   ctx.clearRect(0, 0, canvas.width, canvas.height); $("previewEmpty").hidden = Boolean(picture);
+  canvas.setAttribute("aria-label",crop?"Counter and pointer regions. Open Setup to adjust them.":"Digit and dial editor. Select a region to move, resize or rotate it.");
+  if(crop){
+    ctx.drawImage(picture,crop.x,crop.y,crop.w,crop.h,0,0,crop.w,crop.h);
+    ctx.lineWidth=1;ctx.font=`${Math.max(10,crop.w/55)}px sans-serif`;
+    for(const [i,roi] of current.config.rois.entries()){
+      const points=RoiGeometry.corners(roi,digitSize());ctx.beginPath();points.forEach((p,n)=>{const x=p.x*picture.width-crop.x,y=p.y*picture.height-crop.y;n?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();ctx.strokeStyle=roi.kind==="analog"?"#72c8ff":"#8ff5bc";ctx.stroke();
+      const x=Math.min(...points.map(p=>p.x))*picture.width-crop.x,y=Math.min(...points.map(p=>p.y))*picture.height-crop.y;ctx.fillStyle="#123a2a";ctx.fillRect(x,y-14,20,13);ctx.fillStyle="#c5ffdd";ctx.fillText((roi.kind==="analog"?"A":"")+(i+1),x+2,y-3);
+    }
+    updateRegionCount();return;
+  }
   if (picture) ctx.drawImage(picture, 0, 0, canvas.width, canvas.height);
   if (current && picture && !showingOriginal && !transformPending) {
     ctx.lineWidth = Math.max(2, canvas.width / 400); ctx.font = `${Math.max(15, canvas.width / 45)}px sans-serif`;
@@ -374,7 +454,14 @@ function drawPreview() {
     }
     const digitBounds=current.config.rois.map(roi=>{
       const points=outline(roi);ctx.strokeStyle=$("editGroup").checked?"#ffd46a":"#8ff5bc";ctx.stroke();
-      ctx.save();outline(RoiGeometry.innerFrame(roi));ctx.setLineDash([5,4]);ctx.lineWidth=Math.max(1,canvas.width/700);ctx.strokeStyle="#72c8ff";ctx.stroke();ctx.restore();
+      ctx.save();ctx.strokeStyle="#72c8ff";ctx.lineWidth=Math.max(1,canvas.width/700);
+      if(roi.kind==="analog"){
+        const d=roi.dial||DialTools.defaults(),[a,b,,c]=points,map=(u,v)=>({x:(a.x+(b.x-a.x)*u+(c.x-a.x)*v)*canvas.width,y:(a.y+(b.y-a.y)*u+(c.y-a.y)*v)*canvas.height});
+        ctx.beginPath();for(let n=0;n<=72;n++){const angle=n*Math.PI/36,p=map(d.center_x+Math.sin(angle)*d.radius,d.center_y-Math.cos(angle)*d.radius);if(n)ctx.lineTo(p.x,p.y);else ctx.moveTo(p.x,p.y);}ctx.stroke();
+        const center=map(d.center_x,d.center_y),angle=d.zero_angle_degrees*Math.PI/180,zero=map(d.center_x+Math.sin(angle)*d.radius,d.center_y-Math.cos(angle)*d.radius);
+        ctx.beginPath();ctx.moveTo(center.x,center.y);ctx.lineTo(zero.x,zero.y);ctx.stroke();ctx.fillStyle="#72c8ff";ctx.fillText("0",zero.x+4,zero.y);ctx.beginPath();ctx.arc(center.x,center.y,3,0,Math.PI*2);ctx.fill();
+      }else{outline(RoiGeometry.innerFrame(roi));ctx.setLineDash([5,4]);ctx.stroke();}
+      ctx.restore();
       return {left:Math.min(...points.map(p=>p.x))*canvas.width,right:Math.max(...points.map(p=>p.x))*canvas.width,
         top:Math.min(...points.map(p=>p.y))*canvas.height,bottom:Math.max(...points.map(p=>p.y))*canvas.height};
     });
@@ -402,7 +489,7 @@ function drawPreview() {
     const fontSize=Math.max(15,canvas.width/45),padding=fontSize/3,gap=Math.max(5,ctx.lineWidth*2),placed=[];
     const overlaps=(a,b)=>a.x<b.right && a.x+a.w>b.left && a.y<b.bottom && a.y+a.h>b.top;
     digitBounds.forEach((bounds,index)=>{
-      const text=String(index+1),w=Math.ceil(ctx.measureText(text).width+padding*2),h=Math.ceil(fontSize+padding*2);
+      const text=(current.config.rois[index].kind==="analog"?"A":"")+String(index+1),w=Math.ceil(ctx.measureText(text).width+padding*2),h=Math.ceil(fontSize+padding*2);
       const x=Math.max(0,Math.min(bounds.left,canvas.width-w)),y=Math.max(0,Math.min(bounds.top,canvas.height-h));
       const candidates=[{x,y:bounds.top-gap-h},{x,y:bounds.bottom+gap},{x:bounds.right+gap,y},{x:bounds.left-gap-w,y}].map(p=>({...p,w,h}));
       const visible=candidates.filter(p=>p.x>=0 && p.y>=0 && p.x+w<=canvas.width && p.y+h<=canvas.height);
@@ -579,7 +666,7 @@ async function renderMeter() {
   $("rssi").textContent = state.rssi === null ? (current.config.source.kind === "home_assistant" ? "Home Assistant camera" : "Waiting for an image") : `Wi-Fi ${state.rssi} dBm`;
   $("captureStatus").textContent = readable(current.capture_status?.status || "not_captured");
   renderConfig(); updateHint();
-  if (layoutMeterId !== selected()) { $("cameraSettings").open = !current.config.source.camera_entity; $("recognitionSettings").open = !current.config.rois.length; setCalibration(!current.config.rois.length); layoutMeterId = selected(); }
+  if (layoutMeterId !== selected()) { $("cameraSettings").open = !current.config.source.camera_entity; $("recognitionSettings").open = !current.config.rois.length; setCalibration(document.body.dataset.workspaceView==="setup"||!current.config.rois.length); layoutMeterId = selected(); }
   await loadImage(); historyRows = await (await api(`/api/meters/${selected()}/history`)).json(); renderHistory();
 }
 async function refresh() {
@@ -592,26 +679,31 @@ async function refresh() {
   $("connection").className=`status-chip ${status.ocr_available?"good":"warn"}`;
   await renderMeter();
 }
-function reviewDigit(index) { showView("capture");setCalibration(true);selectedDigit=index;renderDigitSelection();drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true}); }
-function clearDiagnostics() { for(const url of diagnosticUrls)URL.revokeObjectURL(url);diagnosticUrls=[];lastTest=null;$("exampleLabel").value="";$("exportTest").disabled=true;$("digitResults").replaceChildren();$("digitDiagnostics").hidden=true;$("resultCard").hidden=true;$("testResult").textContent="";$("processed").hidden=true;if($("processed").dataset.url){URL.revokeObjectURL($("processed").dataset.url);$("processed").dataset.url="";$("processed").removeAttribute("src");} }
+function reviewDigit(index) { showView("setup");selectedDigit=index;renderDigitSelection();drawPreview();stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true}); }
+function clearDiagnostics() { $("digitDiagnostics").open=false;for(const url of diagnosticUrls)URL.revokeObjectURL(url);diagnosticUrls=[];lastTest=null;$("exampleLabel").value="";$("exportTest").disabled=true;$("digitResults").replaceChildren();$("digitDiagnostics").hidden=true;$("resultCard").hidden=true;$("testResult").textContent="";$("processed").hidden=true;if($("processed").dataset.url){URL.revokeObjectURL($("processed").dataset.url);$("processed").dataset.url="";$("processed").removeAttribute("src");} }
 function imageBlob(payload) { const bytes=Uint8Array.from(atob(payload.base64),c=>c.charCodeAt(0));return new Blob([bytes],{type:payload.mime}); }
 function diagnosticImage(payload,alt) { const img=document.createElement("img");img.alt=alt;const url=URL.createObjectURL(imageBlob(payload));diagnosticUrls.push(url);img.src=url;return img; }
 async function renderResult(result, testOnly) {
   clearDiagnostics();
+  if(testOnly)showView("capture");
   if(testOnly && result.images?.original)lastTest={schema_version:1,kind:"waterwatch_ocr_test",collected_at:new Date().toISOString(),...result};
   const accepted = testOnly ? result.would_accept : result.accepted;
   $("resultCard").hidden=false; $("resultCard").classList.toggle("rejected", !accepted);
   $("resultMode").textContent=testOnly?"OCR TEST · NOT RECORDED":"RECORDED CAPTURE";
-  $("resultValue").textContent=result.raw_value ? `${result.raw_value} m³` : "Unreadable";
+  $("resultValue").textContent=result.raw_value ? `${result.raw_value} m³` : result.reason==="preview_only"?"Dial preview":"Unreadable";
   $("resultReason").textContent=testOnly && accepted?"Would be accepted":readable(result.reason); $("resultReason").className=`result-reason ${accepted?"good":"bad"}`;
   const digits=result.details?.digits || [],used=digits.filter(d=>d.used_for_reading!==false),agreed=used.filter(d=>d.recognitions?.[0]?.[0]!==null && d.recognitions?.[0]?.[0]===d.recognitions?.[1]?.[0] && d.recognitions?.length===2);
   const minimum=agreed.length?Math.min(...agreed.map(d=>Math.min(...d.recognitions.map(r=>r[1])))):null;
-  $("resultConfidence").textContent=digits.length?`${agreed.length}/${used.length} used digits agreed${minimum===null?"":` · Lowest agreed score ${(minimum*100).toFixed(1)}%`}${result.details?.ignored_decimal_digits?` · ${result.details.resolution_litres} L resolution`:""}${testOnly?" · History unchanged":""}`:`${((result.confidence||0)*100).toFixed(1)}% confidence${testOnly?" · History unchanged":""}`;
-  const problem=used.find(d=>!["agreed","rolling_verified"].includes(d.status));
+  $("resultConfidence").textContent=digits.length?`${used.filter(d=>verifiedStatuses.has(d.status)).length}/${used.length} verified${minimum===null?"":` · Lowest score ${(minimum*100).toFixed(1)}%`}${result.details?.ignored_decimal_digits?` · ${result.details.resolution_litres} L`:""}`:`${((result.confidence||0)*100).toFixed(1)}% confidence${testOnly?" · History unchanged":""}`;
+  const problem=used.find(d=>!verifiedStatuses.has(d.status));
   $("reviewDigit").hidden=!problem;
   if(problem){$("reviewDigit").textContent=`Review digit ${problem.digit+1}`;$("reviewDigit").onclick=()=>reviewDigit(problem.digit);}
   const rolling=used.find(d=>d.wheel_policy);
   $("resultAdvice").textContent=rolling?.wheel_policy==="unavailable"?"Rolling model unavailable. Rebuild the app to install its pinned model.":problem?.status==="rolling_uncertain"?"The wheel is close to a carry, the model views disagree, or support is too low. Keep full precision to wait for a clear result, or explicitly choose a larger reading unit in Digit recognition.":problem?`Digit ${problem.digit+1} needs attention. Check its box and focus.${problem.digit===digits.length-1 && !rolling?" If it is rotating, try the phase model in Digit recognition.":""}`:rolling?.wheel_policy==="transition_verified"?"The last wheel is between numbers. Two phase views support the completed digit; the next digit has not been rounded up.":"All used digits agree. Flow, baseline and timestamp checks still apply.";
+  if(result.reason==="baseline_required"&&!problem)$("resultAdvice").textContent="Set a baseline from the physical meter to start recording.";
+  if(result.reason==="preview_only")$("resultAdvice").textContent="The dial is for inspection only. Confirm its scale in Setup before including it in the total.";
+  if(problem?.kind==="analog")$("resultAdvice").textContent="Check the dial centre, zero tick and pointer colour in Setup. Competing pointers or a position near a numbered tick stay uncertain.";
+  $("digitSummary").textContent=`${used.filter(d=>verifiedStatuses.has(d.status)).length}/${used.length} reading regions verified${digits.some(d=>d.included_in_total===false)?" · preview dial separate":""}`;
   const {images,...summary}=result;$("testResult").textContent=JSON.stringify(summary,null,2);
   $("viewTestPhoto").hidden=!images?.original;
   const alignment=result.details?.alignment;
@@ -619,11 +711,13 @@ async function renderResult(result, testOnly) {
   $("digitDiagnostics").hidden=!digits.length && !alignment;
   for(const digit of digits){
     const card=document.createElement("article");card.className=`digit-result ${digit.status||""}`;
-    const title=document.createElement("strong");title.textContent=`Digit ${digit.digit+1} · ${digit.used_for_reading===false?"Excluded at chosen precision":readable(digit.status||"quality check")}`;card.append(title);
+    const title=document.createElement("strong");title.textContent=`${digit.kind==="analog"?"Dial":"Digit"} ${digit.digit+1} · ${digit.included_in_total===false?"Preview only":digit.used_for_reading===false?"Excluded at chosen precision":readable(digit.status||"quality check")}`;card.append(title);
     if(digit.possible_transition && digit.wheel_policy!=="transition_verified"){const note=document.createElement("p");note.textContent=`Possible wheel transition ${digit.possible_transition.join(" → ")}. No digit inferred.`;card.append(note);}
     if(images?.digits?.[digit.digit])card.append(diagnosticImage(images.digits[digit.digit],`Actual crop for digit ${digit.digit+1}`));
     const value=document.createElement("span");value.className="digit-value";value.textContent=digit.recognitions?.[0]?.[0] && digit.recognitions[0][0]===digit.recognitions?.[1]?.[0]?digit.recognitions[0][0]:"?";card.append(value);
     if(digit.wheel_views?.length){const phase=document.createElement("p");phase.className="wheel-phase";phase.textContent=`Wheel position ${digit.wheel_views.map(v=>Number(v.phase).toFixed(1)).join(" / ")}${digit.wheel_policy==="transition_verified"?" · completed digit used":""}`;card.append(phase);}
+    if(digit.analog_views?.length){const phase=document.createElement("p");phase.className="wheel-phase";phase.textContent=`Pointer position ${digit.analog_views.map(v=>Number(v.phase).toFixed(2)).join(" / ")} on 0–9 scale`;card.append(phase);}
+    if(digit.analog_policy==="near_digit_boundary"){const note=document.createElement("p");note.textContent="Near a numbered tick; completed digit remains uncertain.";card.append(note);}
     const scores=document.createElement("details"),label=document.createElement("summary");label.textContent="Scores & image quality";scores.append(label);
     for(const [index,recognition] of (digit.recognitions||[]).entries()){const line=document.createElement("p");line.textContent=`${digit.recognition_sources?.[index]||`Pass ${index+1}`}: ${recognition[0]??"?"} · ${(recognition[1]*100).toFixed(1)}%`;scores.append(line);}
     if(digit.recognition_policy==="assisted_consensus" && !digit.wheel_views){const note=document.createElement("p");note.textContent="Supported by two normalized Latin-model views";scores.append(note);}
@@ -644,7 +738,7 @@ async function renderResult(result, testOnly) {
     $("processed").hidden=!images.processed;
     if(images.processed){if($("processed").dataset.url)URL.revokeObjectURL($("processed").dataset.url);const url=URL.createObjectURL(imageBlob(images.processed));$("processed").dataset.url=url;$("processed").src=url;}
   }
-  if(testOnly)requestAnimationFrame(()=>$("resultCard").scrollIntoView({block:"start"}));
+  if(testOnly && document.body.dataset.workspaceView!=="capture")requestAnimationFrame(()=>$("resultCard").scrollIntoView({block:"nearest"}));
 }
 $("viewTestPhoto").onclick=()=>{stage.scrollIntoView({block:"center"});canvas.focus({preventScroll:true});};
 $("exportTest").onclick=()=>{
@@ -685,15 +779,24 @@ canvas.onpointerdown=event=>{
   }
   event.preventDefault();canvas.focus({preventScroll:true});
   const position=point(event),before=digitSnapshot();
+  if(dialMark){
+    const roi=current.config.rois[selectedDigit];
+    if(roi?.kind!=="analog"){dialMark=null;return;}
+    const p=DialTools.local(roi,position,RoiGeometry.corners(roi,digitSize())),dial={...(roi.dial||DialTools.defaults())};
+    if(dialMark==="center"){dial.center_x=p.x;dial.center_y=p.y;}
+    else{if(Math.hypot(p.x-dial.center_x,p.y-dial.center_y)<.1){message("Click the 0 tick near the dial rim, away from the centre.",true);return;}dial.zero_angle_degrees=Math.round(DialTools.zero(dial,p)*10)/10%360;}
+    if(!DialTools.valid(dial)){message("Keep the full dial circle inside the box. Resize the box or reduce its radius first.",true);return;}
+    roi.dial=dial;dialMark=null;commitDigitEdit(before);return;
+  }
   if(landmarkTarget!==null){startPoint=position;draftPoint=position;digitDrag={kind:"landmark",target:landmarkTarget,before,pointerId:event.pointerId};}
   else if(digitMode==="landmark"){
     const box=canvas.getBoundingClientRect(),hit=RoiGeometry.hitTest(current.config.alignment.anchors,position,{x:8/box.width,y:8/box.height},selectedLandmark,digitSize());
     selectedLandmark=hit?.index??-1;
     if(hit)digitDrag={...hit,kind:"landmark-edit",before,origin:position,roi:{...current.config.alignment.anchors[hit.index]},pointerId:event.pointerId};
   }
-  else if(digitMode==="add") {
+  else if(digitMode==="add"||digitMode==="add_analog") {
     if(current.config.rois.length>=12){message("Up to 12 digit regions are supported.",true);return;}
-    startPoint=position;draftPoint=position;digitDrag={kind:"add",before,pointerId:event.pointerId};
+    startPoint=position;draftPoint=position;digitDrag={kind:digitMode,before,pointerId:event.pointerId};
   } else {
     const hit=digitHit(position);
     selectedDigit=hit?.index ?? -1;
@@ -703,7 +806,7 @@ canvas.onpointerdown=event=>{
   drawPreview();
 };
 function updateDigitDrag(position) {
-  if(["add","landmark"].includes(digitDrag.kind))draftPoint=position;
+  if(["add","add_analog","landmark"].includes(digitDrag.kind))draftPoint=position;
   else {
     const {roi,origin,handle,index}=digitDrag;
     if(digitDrag.kind==="landmark-edit"){
@@ -739,10 +842,10 @@ canvas.onpointerup=event=>{
     else message("Choose a landmark at least 9 image pixels wide/high, covering at most 10% of the photo.",true);
     digitDrag=null;startPoint=null;draftPoint=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);commitDigitEdit(before);return;
   }
-  if(kind==="add") {
-    const drawn=RoiGeometry.fromPoints(startPoint,draftPoint,minimumDigitSize());
-    const roi=drawn && ($("drawDigitFrame").value==="inner"?RoiGeometry.outerFrame(drawn,digitSize()):drawn);
-    if(roi){current.config.rois.push(roi);selectedDigit=current.config.rois.length-1;}
+  if(kind==="add"||kind==="add_analog") {
+    const drawn=RoiGeometry.fromPoints(startPoint,draftPoint,kind==="add_analog"?{w:32/digitSize().width,h:32/digitSize().height}:minimumDigitSize());
+    const roi=drawn && (kind==="add_analog"?{...drawn,kind:"analog",dial:DialTools.defaults(),include_in_reading:false}:$("drawDigitFrame").value==="inner"?RoiGeometry.outerFrame(drawn,digitSize()):drawn);
+    if(roi){current.config.rois.push(roi);selectedDigit=current.config.rois.length-1;if(kind==="add_analog"){digitMode="edit";message("Dial added for preview. Mark its centre and 0 tick; confirm its scale before including it in the total.");}}
     else message(drawn?"Leave room for the outer 20% margins inside the photo. Move the digit frame inward or draw the outer crop directly.":"Draw a box at least 9 image pixels wide and high.",true);
   }
   digitDrag=null;startPoint=null;draftPoint=null;
@@ -752,7 +855,7 @@ canvas.onpointerup=event=>{
 canvas.onpointercancel=canvas.onlostpointercapture=canvas.onblur=cancelDigitDrag;
 canvas.onkeydown=event=>{
   if(event.key==="Escape") {
-    event.preventDefault();if(digitDrag)cancelDigitDrag();else{selectedDigit=-1;landmarkTarget=null;drawPreview();}return;
+    event.preventDefault();if(digitDrag)cancelDigitDrag();else if(dialMark){dialMark=null;drawPreview();}else{selectedDigit=-1;landmarkTarget=null;drawPreview();}return;
   }
   if((!digitEditorReady() && !(digitMode==="landmark" && landmarkEditorReady())) || digitDrag)return;
   if(event.ctrlKey || event.metaKey) {

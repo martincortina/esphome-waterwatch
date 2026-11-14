@@ -32,6 +32,22 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+class DialConfig(StrictModel):
+    # Fractions of the rectified ROI, with an elliptical radius on both axes.
+    center_x: float = Field(default=.5, ge=.1, le=.9)
+    center_y: float = Field(default=.5, ge=.1, le=.9)
+    radius: float = Field(default=.45, ge=.15, le=.49)
+    zero_angle_degrees: float = Field(default=0, ge=0, lt=360)
+    clockwise: bool = True
+    pointer_color: Literal["red", "dark"] = "red"
+
+    @model_validator(mode="after")
+    def fits(self):
+        if any(c-self.radius < 0 or c+self.radius > 1 for c in (self.center_x, self.center_y)):
+            raise ValueError("Dial circle must fit inside its region")
+        return self
+
+
 class ROI(StrictModel):
     x: float = Field(ge=0, lt=1)
     y: float = Field(ge=0, lt=1)
@@ -39,11 +55,16 @@ class ROI(StrictModel):
     h: float = Field(gt=0, le=1)
     # Clockwise orientation of this box in the aligned image; OCR unrotates it.
     rotation_degrees: float = Field(default=0, ge=-180, le=180)
+    kind: Literal["digit", "analog"] = "digit"
+    dial: DialConfig | None = None
+    include_in_reading: bool = True
 
     @model_validator(mode="after")
     def bounds(self):
         if self.x + self.w > 1.000001 or self.y + self.h > 1.000001:
             raise ValueError("ROI must be inside the image")
+        if self.kind == "analog" and self.dial is None:
+            self.dial = DialConfig()
         return self
 
 
@@ -94,7 +115,7 @@ class AlignmentConfig(StrictModel):
 
     @model_validator(mode="after")
     def valid_anchors(self):
-        if any(roi.rotation_degrees or roi.w * roi.h > .1 for roi in self.anchors):
+        if any(roi.kind != "digit" or roi.rotation_degrees or roi.w * roi.h > .1 for roi in self.anchors):
             raise ValueError("Landmarks must be unrotated and cover at most 10% of the image")
         if self.enabled and (not self.reference_id or len(self.anchors) != 2):
             raise ValueError("Automatic alignment needs a saved reference and two landmarks")
@@ -140,7 +161,8 @@ class MeterConfig(StrictModel):
             raise ValueError("Rolling-wheel mode requires a decimal wheel")
         if self.ignored_decimal_digits > self.decimal_places:
             raise ValueError("Only decimal digits can be excluded from the reading")
-        if self.rois and self.decimal_places >= len(self.rois):
+        included = [roi for roi in self.rois if roi.include_in_reading]
+        if included and self.decimal_places >= len(included):
             raise ValueError("Need at least one integer digit ROI")
         if self.min_brightness >= self.max_brightness:
             raise ValueError("Brightness bounds are inverted")

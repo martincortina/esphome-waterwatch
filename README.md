@@ -31,7 +31,9 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
 - Native ESPHome camera transport through HA; images remain on your own host.
 - Optional brief LED illumination for each preview or OCR reading; LED off between
   captures, with device-side timeout and host cleanup. No continuous light required.
-- Guided photo / digit setup / reading check with dark/light/system themes, digit regions, zoom,
+- Compact Read / Setup / History views with a focused counter photo, nearby result,
+  collapsed diagnostics, a baseline shortcut and dark/light/system themes.
+- Digit and dial regions, zoom,
   static perspective correction, dry-run OCR and a dedicated history view.
 - Quarter turns and fine-angle straightening, saved per meter and applied before
   OCR crops the digits. Original camera images stay unchanged.
@@ -48,6 +50,9 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
 - Editable/removable alignment landmarks with Undo/Redo and numeric positioning.
 - Confirmed reading-log deletion retains the current verified counter and removes
   attached captures; previous Home Assistant statistics remain unchanged.
+- Calibrated red/dark 0–9 pointer dials support preview-only regions; confirm the
+  printed scale before including a dial as the next decimal. Glass reflections,
+  competing needles and numbered-tick boundaries remain rejected when uncertain.
 - Optional last-decimal wheel phase model handles intermediate positions with carry
   guards (experimental; separate private/non-commercial model license).
 - Optional lower decimal precision keeps a rolling final wheel visible while
@@ -59,7 +64,7 @@ No SD card is required. See [setup and calibration](waterwatch_esphome/DOCS.md).
 - Optional MQTT discovery and cumulative water statistics, disabled by default.
 
 **Experimental:** text OCR and optional last-decimal phase recognition run on the HA
-host. Coupled carries and analog pointers remain unsupported. Landmark alignment and
+host. Coupled carries and uncalibrated or obscured pointers remain unsupported. Landmark alignment and
 recognition scores do not establish real meter accuracy. Unclear digits stay rejected.
 Test and calibrate your actual meter before enabling publication.
 

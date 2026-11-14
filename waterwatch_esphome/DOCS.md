@@ -183,13 +183,13 @@ retained. HA add-on backups contain them; configuration JSON alone does not cont
 reference photographs. Alignment is disabled by default on existing meters.
 
 The default recognizer uses pinned PP-OCRv5 text models. Optional last-decimal
-phase recognition is described below. Coupled carries, analog pointers and a
-labelled training gallery remain subsequent work. New mounts need validation.
+phase recognition is described below. Coupled carries and a labelled training gallery remain subsequent work. New mounts need validation.
 
 ## Recognition boundaries
 
 This is host-side OpenCV/PP-OCRv5 recognition with a general English model. It supports a fixed digital wheel layout with per-digit boxes and
-optional static perspective correction. It has no trained analog-pointer reader. Last-decimal phase recognition remains
+optional static perspective correction. Analog pointers use calibrated geometric detection, not a trained pointer model.
+Last-decimal phase recognition remains
 experimental and can reject intermediate or boundary positions. Optional landmark alignment only compensates
 small rigid camera movements; it does not guarantee recognition accuracy. Recognition
 scores and two-pass agreement do not establish real meter accuracy.
@@ -321,3 +321,56 @@ larger litre unit can keep reliable larger digits while leaving a distorted whee
 visible for inspection. It reduces precision rather than increasing confidence.
 Neither mode nor precision is changed automatically in an existing configuration.
 Validate fresh photos on the actual meter before relying on automatic readings.
+
+## Compact workspace, baseline and analog dials (0.12.0)
+
+**Read** keeps the counter crop and result together. The full photo and calibration
+controls live in **Setup**. Expand **Digits & dials** only when investigating a
+region; scores, exports and uploaded-image tools remain available in Setup.
+Unsaved changes reveal the save bar. Setup retains the full source image and zoom.
+The focused Read image is only a display crop; saved ROI coordinates stay in the
+full aligned photo.
+
+To establish a baseline, select **Set baseline** on Read. The app opens History's
+baseline form. Enter the meter total you verified physically in m³, add a reason
+(at least eight characters), and select **Record baseline**. For example, a counter
+of 00158.837 means 158 m³ plus 837 litres; do not multiply the red decimals by ten.
+A test result is a candidate, not physical confirmation. The shortcut leaves the
+value empty and never records automatically. A baseline establishes the starting
+total for future validation, preserving previous events. Automatic capture and
+MQTT publication are separate settings and stay unchanged by baseline setup.
+
+For a numbered 0–9 dial with a directional red or dark pointer:
+
+1. Take a photo and open **Setup > Add dial**. Draw around the complete dial,
+   including the scale. The box must contain at least 32 source-image pixels in
+   each dimension; a larger, focused crop gives more useful evidence.
+2. Select the new dial, choose pointer colour and clockwise/counterclockwise order.
+   Mark its pivot with **Mark centre**, then click the printed 0 tick with
+   **Mark 0 on scale**. Fit the blue circle to the rim using the radius setting.
+   A non-circular view uses the crop's two dimensions to rectify the ellipse.
+3. Check the reading. The dial starts with `include_in_reading: false`: its position
+   appears in diagnostics but cannot alter the current reading or decimal point.
+4. Confirm the printed multiplier **per numbered step**, not per full revolution.
+   If the current counter has three decimals, the next dial must be 0.0001 m³ per
+   step (0.1 L); a full numbered 0–9 revolution then spans 0.001 m³ (1 L).
+   Enter that verified scale and select **Include in total**. This appends exactly
+   one decimal and explicitly selects full precision. A mismatched scale is
+   refused. Only sequential decimal dials are supported by this UI.
+5. Undo restores the region and its decimal layout. Duplicated dials start as
+   preview-only. Removing the last included decimal dial restores the prior
+   precision. Check the reading again before enabling automatic capture.
+
+Pointer detection isolates the configured colour, excludes the central hub and
+outer scale, and compares angular evidence in two annular bands. Their angles must
+agree within four degrees and their completed digits must agree. A 0.08-digit
+boundary guard avoids changing a counter digit due to small angle errors. Support
+scores describe geometric separation from competing rays, not calibrated accuracy
+probabilities. Image-quality and configured confidence checks still apply. The
+implementation uses OpenCV only and does not download an analog model.
+
+A red reflection, counterweight, second pointer, obstruction or incorrect pivot
+can make the dial uncertain. Full-turn spinners and unnumbered flow indicators
+are unsupported. A preview is not proof of measurement accuracy. Verify the scale
+and pointer orientation against the physical meter at several positions, including
+carries; this feature does not infer coupled carries in larger wheels.

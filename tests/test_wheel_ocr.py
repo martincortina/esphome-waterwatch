@@ -103,3 +103,13 @@ def test_model_configuration_is_backward_compatible_and_requires_decimal_wheel()
     assert configuration().last_decimal_mode == "text"
     with pytest.raises(ValidationError):
         MeterConfig(id="a", name="a", decimal_places=0, last_decimal_mode="rolling")
+
+
+def test_preview_dial_after_rolling_wheel_cannot_shift_its_position_or_scale(image):
+    cfg = configuration()
+    cfg.last_decimal_mode = "rolling"
+    cfg.rois.append(ROI(x=.3, y=.2, w=.12, h=.6, kind="analog", include_in_reading=False))
+    result = Pipeline(TextEngine(), wheel_engine=Wheel()).run(image, cfg)
+    assert result.raw_value == "1.7" and result.confidence == .98
+    assert result.details["digits"][1]["status"] == "rolling_verified"
+    assert result.details["digits"][2]["used_for_reading"] is False
