@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from server.models import DialConfig, MeterConfig, ROI, VisualReference
 from server.ocr import Pipeline
-from server.reference_ocr import ReferenceSample, recognize_glyph, recognize_pointer
+from server.reference_ocr import ReferenceSample, recognize_glyph, recognize_pointer, recognize_sector
 
 
 def glyph(value):
@@ -133,6 +133,33 @@ def test_pointer_blanks_competing_needles_and_conflicting_labels_reject():
     assert recognize_pointer(pointer(0), DialConfig(), samples+[ReferenceSample(pointer(0), 4, .2)], .8) is None
 
 
+def test_sector_reference_classifies_only_matching_absolute_pointer_poses():
+    image=pointer(6.4*36)
+    sample=ReferenceSample(image,6,identifier='a'*32,kind='sector')
+    result=recognize_sector(image,DialConfig(),[sample],.8)
+    assert [v for v,s in result['results']]==['6','6']
+    assert min(s for v,s in result['results'])>=.97
+    assert recognize_pointer(image,DialConfig(),[sample],.8) is None
+    for digit in [0,1,2,3,4,5,7,8,9]:
+        assert recognize_sector(pointer((digit+.4)*36),DialConfig(),[sample],.8) is None
+    assert recognize_sector(image,DialConfig(),[sample,ReferenceSample(image,5,kind='sector')],.8) is None
+
+
+def test_included_dial_can_use_a_verified_sector_without_inventing_a_precise_angle():
+    cfg=MeterConfig(id='a',name='a',decimal_places=1,rois=[ROI(x=0,y=0,w=.5,h=1),
+        ROI(x=.5,y=0,w=.5,h=1,kind='analog',visual_references=[VisualReference(id='a'*32,value=6,kind='sector')])])
+    class Text:
+        def digit(self,patch):return '1',.99
+    image=pointer(6.4*36)
+    sample=ReferenceSample(image,6,identifier='a'*32,kind='sector')
+    data=cv2.imencode('.png',np.hstack([cv2.resize(glyph(1),(160,160)),image]))[1].tobytes()
+    result=Pipeline(Text(),recognition_loader=lambda cfg,i:[sample] if i==1 else []).run(data,cfg)
+    assert result.raw_value=='1.6'
+    dial=result.details['digits'][1]
+    assert dial['status']=='analog_verified' and dial['analog_policy']=='verified_sector_reference'
+    assert 'analog_views' not in dial and 'pointer_position_verified' not in dial
+
+
 def test_reference_labels_are_strict_and_bounded():
     with pytest.raises(ValidationError):
         ROI(x=0, y=0, w=1, h=1, visual_references=[VisualReference(id='a'*32, value=1.2)])
@@ -180,6 +207,15 @@ def test_reference_api_is_private_geometry_bound_and_does_not_change_ledger(clie
     assert client.put('/api/meters/house', json=cfg.model_dump()).status_code == 200
     samples = client.service.load_visual_references(cfg, 0)
     assert len(samples) == 1 and np.array_equal(samples[0].image, glyph(1))
+    # New recognition choices do not invalidate already saved private crops.
+    cfg.rois[0].recognition_mode='calibrated'
+    assert len(client.service.load_visual_references(cfg,0))==1
+    # References written before the optional kind field remain readable.
+    import json
+    metadata=client.service.references/f"recognition-house-{cfg.rois[0].visual_references[0].id}.json"
+    legacy=json.loads(metadata.read_text(encoding='utf-8'));legacy['label'].pop('kind')
+    metadata.write_text(json.dumps(legacy),encoding='utf-8')
+    assert len(client.service.load_visual_references(cfg,0))==1
     cfg.rois[0].x = .01
     cfg.rois[0].w = .99
     assert not client.service.load_visual_references(cfg, 0)
@@ -190,3 +226,19 @@ def test_reference_api_is_private_geometry_bound_and_does_not_change_ledger(clie
     for query in ['region=12&value=1', 'region=0&value=1.2', 'region=0&value=10']:
         assert client.post('/api/meters/house/recognition-reference?'+query, content=data).status_code == 422
     assert {table: client.service.store.all(f'SELECT * FROM {table}') for table in before} == before
+
+
+def test_sector_reference_api_preserves_label_kind_and_does_not_record(client):
+    cfg=MeterConfig(id='house',name='House',rois=[ROI(x=0,y=0,w=1,h=1,kind='analog',include_in_reading=False)])
+    client.service.save_config(cfg)
+    before={table:client.service.store.all(f'SELECT * FROM {table}') for table in ['readings','outbox']}
+    data=cv2.imencode('.png',pointer(6.4*36))[1].tobytes()
+    response=client.post('/api/meters/house/recognition-reference?region=0&value=6&kind=sector',content=data)
+    assert response.status_code==200
+    cfg.rois[0].visual_references=[VisualReference.model_validate(response.json()['reference'])]
+    assert cfg.rois[0].visual_references[0].kind=='sector'
+    assert client.put('/api/meters/house',json=cfg.model_dump()).status_code==200
+    assert client.service.load_visual_references(cfg,0)[0].kind=='sector'
+    for query in ['value=6.2&kind=sector','value=6&kind=sector&uncertainty=.1','value=6&kind=unknown']:
+        assert client.post('/api/meters/house/recognition-reference?region=0&'+query,content=data).status_code==422
+    assert {table:client.service.store.all(f'SELECT * FROM {table}') for table in before}==before

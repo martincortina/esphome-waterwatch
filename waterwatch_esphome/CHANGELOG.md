@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.0
+
+- Calculate sequential dial scales as one tenth of the preceding wheel or dial.
+  Confirm inclusion in reading order; support up to six decimal places in m³.
+- Select text, rolling or learned recognition separately for each number wheel.
+  Higher wheels can use phase recognition during a carry.
+- Teach private, physically verified wheel photos and completed dial digits from
+  Setup. Keep up to 32 references per region and report measured match scores.
+  Learned wheels abstain at unsupported positions unless independent text models
+  and phase recognition corroborate them; thresholds are not reduced.
+- Preserve legacy reference metadata, baselines, history and publication settings.
+
 ## 0.12.3
 
 - Require agreement from independent English and Latin character models before

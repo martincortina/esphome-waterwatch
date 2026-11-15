@@ -13,7 +13,7 @@ from server.alignment import AlignmentError, register
 from server.analog_ocr import recognize_dial
 from server.models import ROI, MeterConfig
 from server.neural_ocr import ASSIST_VIEWS, NeuralOCREngine, NeuralOCRError
-from server.reference_ocr import recognize_glyph, recognize_pointer
+from server.reference_ocr import recognize_glyph, recognize_pointer, recognize_sector
 from server.wheel_ocr import WheelOCREngine, resolve_wheel
 
 
@@ -199,6 +199,9 @@ class Pipeline:
         included_digital = [i for i in reading_indices if cfg.rois[i].kind == "digit"]
         last_digital = included_digital[-1] if included_digital else None
         decimal_indices = set(reading_indices[-cfg.decimal_places:]) if cfg.decimal_places else set()
+        rolling_indices = {i for i in text_indices if cfg.rois[i].recognition_mode in {"rolling", "calibrated"}
+                           or cfg.rois[i].recognition_mode == "auto" and cfg.last_decimal_mode == "rolling"
+                           and i == last_digital and i in decimal_indices}
         if text_indices and callable(getattr(self.engine, "recognize_digits", None)):
             colors, valid = [], []
             for index in text_indices:
@@ -300,7 +303,7 @@ class Pipeline:
                 diagnostics[-1].update(evidence[row_index[index]])
             raw_text = [*diagnostics[-1].get("primary_recognitions", results),
                         *diagnostics[-1].get("assist_recognitions", [])]
-            if cfg.last_decimal_mode == "rolling" and index == last_digital and index in decimal_indices:
+            if index in rolling_indices:
                 diagnostics[-1]["text_recognitions"] = results
                 try:
                     views = self.wheel_engine.recognize(color)
@@ -323,13 +326,36 @@ class Pipeline:
                     samples = self.recognition_loader(cfg, index)
                 except (OSError, ValueError):
                     diagnostics[-1]["reference_error"] = "reference_missing_or_changed"
+            learned_wheel = roi.recognition_mode == "calibrated"
+            if learned_wheel:
+                original_result = results
+                reference_result = recognize_glyph(color, samples, cfg.min_confidence) if samples else None
+                if reference_result is not None:
+                    diagnostics[-1]["wheel_model_recognitions"] = original_result
+                    diagnostics[-1]["wheel_model_policy"] = diagnostics[-1].get("wheel_policy")
+                    diagnostics[-1].pop("possible_transition", None)
+                    results = reference_result.pop("results")
+                    diagnostics[-1].update(reference_result, recognitions=results,
+                                           wheel_policy="calibrated_reference_verified")
+                else:
+                    candidate = results[0][0]
+                    groups = [diagnostics[-1].get("primary_recognitions", []),
+                              diagnostics[-1].get("assist_recognitions", [])]
+                    corroborated = (candidate is not None and candidate == results[1][0]
+                                    and min(s for _, s in results) >= cfg.min_confidence
+                                    and all(any(value == candidate and score >= cfg.min_confidence
+                                                for value, score in group) for group in groups))
+                    if not corroborated:
+                        diagnostics[-1]["wheel_model_recognitions"] = original_result
+                        results = [(None, 0.)]*2
+                        diagnostics[-1].update(wheel_policy="calibration_required", recognitions=results)
             if samples and roi.kind == "digit" and not (
                 results[0][0] is not None and results[0][0] == results[1][0]
                 and min(score for _, score in results) >= cfg.min_confidence
-            ):
+            ) and not learned_wheel:
                 # A photometric fallback needs an independently strong numeric
                 # model view. Never use this route to bypass the rolling carry checks.
-                rolling = cfg.last_decimal_mode == "rolling" and index == last_digital
+                rolling = index in rolling_indices
                 reference_result = recognize_glyph(color, samples, cfg.min_confidence,
                                                    corroborating=() if rolling else raw_text)
                 if reference_result is not None:
@@ -363,8 +389,15 @@ class Pipeline:
                     results = [(None if near_tick or values[0] != values[1] else value, view["score"])
                                for value, view in zip(values, views, strict=True)]
                     diagnostics[-1].update(recognitions=results, analog_digit_boundary=near_tick)
+                sector = recognize_sector(color, roi.dial, samples, cfg.min_confidence)
+                if sector is not None:
+                    diagnostics[-1]["unverified_analog_views"] = diagnostics[-1].pop("analog_views", [])
+                    diagnostics[-1].pop("pointer_position_verified", None)
+                    diagnostics[-1].pop("analog_digit_boundary", None)
+                    results = sector.pop("results")
+                    diagnostics[-1].update(sector, recognitions=results)
             choices = {r[0] for r in raw_text if r[0] is not None and r[1] >= .5}
-            if (diagnostics[-1].get("wheel_policy") != "transition_verified" and len(choices) == 2
+            if (not diagnostics[-1].get("reference_policy") and diagnostics[-1].get("wheel_policy") != "transition_verified" and len(choices) == 2
                     and all(len(c) == 1 and c in "0123456789" for c in choices)):
                 for first in sorted(choices):
                     following = str((int(first)+1) % 10)
@@ -377,7 +410,7 @@ class Pipeline:
                 diagnostics[-1]["status"] = "analog_verified" if agreed and min(r[1] for r in results) >= cfg.min_confidence else "analog_uncertain"
             if diagnostics[-1].get("wheel_policy") == "transition_verified":
                 diagnostics[-1]["status"] = "rolling_verified"
-            elif diagnostics[-1].get("wheel_policy") in {"uncertain", "unavailable"}:
+            elif diagnostics[-1].get("wheel_policy") in {"uncertain", "unavailable", "calibration_required"}:
                 diagnostics[-1]["status"] = "rolling_uncertain"
             if diagnostics[-1].get("reference_policy") == "verified_glyph_shape":
                 diagnostics[-1]["status"] = "reference_verified"

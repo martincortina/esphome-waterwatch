@@ -16,3 +16,25 @@ test('including a preview dial verifies its scale and adds exactly one decimal',
 test('dial circle cannot leave its region',()=>{
   assert.equal(dial.valid(dial.defaults()),true);assert.equal(dial.valid({...dial.defaults(),center_x:.2}),false);assert.equal(dial.valid({...dial.defaults(),zero_angle_degrees:360}),false);
 });
+function counter(){return {decimal_places:3,ignored_decimal_digits:0,rois:[...Array.from({length:8},()=>({kind:'digit'})),...Array.from({length:3},()=>({kind:'analog',include_in_reading:false}))]};}
+test('each additional dial is one tenth of the preceding dial, including preview scale',()=>{
+  const cfg=counter();
+  assert.equal(dial.scalePlan(cfg,8).step,.0001);assert.equal(dial.scalePlan(cfg,9).step,.00001);assert.equal(dial.scalePlan(cfg,10).step,.000001);
+  for(let index=8;index<11;index++){
+    const plan=dial.scalePlan(cfg,index);assert.equal(plan.ordinal,index-7);assert.equal(plan.parent,index-1);
+    Object.assign(cfg,dial.includePlan(cfg,index,'previous/10'));cfg.rois[index].include_in_reading=true;
+  }
+  assert.equal(cfg.decimal_places,6);assert.equal(dial.scalePlan(cfg,8).step,.0001);assert.equal(dial.scalePlan(cfg,10).step,.000001);
+});
+test('a finer dial cannot skip a preview-only predecessor or change a coarser scale',()=>{
+  const cfg=counter();assert.throws(()=>dial.includePlan(cfg,9,'previous/10'),/preceding/);
+  Object.assign(cfg,dial.includePlan(cfg,8,'previous/10'));cfg.rois[8].include_in_reading=true;
+  Object.assign(cfg,dial.includePlan(cfg,9,'previous/10'));cfg.rois[9].include_in_reading=true;
+  assert.throws(()=>dial.removePlan(cfg,8),/finest/);
+  const removal=dial.removePlan(cfg,9);assert.equal(removal.decimal_places,4);
+});
+test('millilitre precision limit is explained before including an extra dial',()=>{
+  const cfg=counter();for(let index=8;index<11;index++){Object.assign(cfg,dial.includePlan(cfg,index,'previous/10'));cfg.rois[index].include_in_reading=true;}
+  cfg.rois.push({kind:'analog',include_in_reading:false});assert.equal(dial.scalePlan(cfg,11).can_include,false);
+  assert.throws(()=>dial.includePlan(cfg,11,'previous/10'),/six decimal/);
+});

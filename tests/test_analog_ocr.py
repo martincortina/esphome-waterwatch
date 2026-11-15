@@ -95,3 +95,16 @@ def test_analog_only_preview_has_no_numeric_counter():
     assert engine.calls == []
     assert result.raw_value is None and result.reason == "preview_only"
 
+
+def test_two_sequential_dials_extend_the_counter_with_two_decimal_places():
+    frame = np.hstack([np.full((160,160,3),200,np.uint8),dial(3.4*36),dial(4.4*36)])
+    cv2.putText(frame,'1',(40,130),cv2.FONT_HERSHEY_SIMPLEX,3,(20,20,20),5)
+    data = cv2.imencode('.png',frame)[1].tobytes()
+    cfg = MeterConfig(id='a',name='a',decimal_places=2,rois=[
+        ROI(x=0,y=0,w=1/3,h=1),
+        ROI(x=1/3,y=0,w=1/3,h=1,kind='analog'),
+        ROI(x=2/3,y=0,w=1/3,h=1,kind='analog')])
+    result = Pipeline(Text()).run(data,cfg)
+    assert result.raw_value == '1.34'
+    assert result.confidence >= .8
+

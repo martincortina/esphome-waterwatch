@@ -17,6 +17,7 @@ class ReferenceSample:
     value: float
     uncertainty: float = 0
     identifier: str = ""
+    kind: str = "position"
 
 
 def glyph_contrast(patch):
@@ -176,6 +177,8 @@ def recognize_pointer(patch, cfg, samples, threshold):
     current = [pointer_polar(patch, cfg, *band) for band in bands]
     candidates = []
     for sample in samples:
+        if sample.kind != "position":
+            continue
         target = [pointer_polar(sample.image, cfg, *band) for band in bands]
         expected = (cfg.zero_angle_degrees+sample.value*36*(1 if cfg.clockwise else -1)) % 360
         for policy in ("whole_pointer", "needle_head"):
@@ -200,3 +203,43 @@ def recognize_pointer(patch, cfg, samples, threshold):
     return {"analog_views": views, "analog_policy": "verified_pointer_shape", "reference_id": identifier,
             "pointer_position_verified": True, "reference_match": policy,
             "recognition_sources": ["Pointer reference · inner band", "Pointer reference · outer band"]}
+
+
+def recognize_sector(patch, cfg, samples, threshold):
+    """Classify a physically labelled sector at the same observed pointer pose.
+
+    This is an absolute-angle pattern comparison: do not rotate a known digit
+    around the dial and reuse its label. Both bands need strong correlation;
+    competing sector labels and empty colour profiles remain unresolved.
+    """
+    bands = [(.32, .70), (.48, .84)]
+    current = [pointer_polar(patch, cfg, *band).mean(axis=1) for band in bands]
+    candidates = []
+    for sample in samples:
+        if sample.kind != "sector":
+            continue
+        target = [pointer_polar(sample.image, cfg, *band).mean(axis=1) for band in bands]
+        best = (0., 0.)
+        for shift in range(-2, 3):  # at most one degree of sampling/alignment jitter
+            scores = []
+            for actual, known in zip(current, target, strict=True):
+                a, b = np.roll(actual, shift)-actual.mean(), known-known.mean()
+                if min(float(a.std()), float(b.std())) < .015:
+                    scores.append(0.)
+                    continue
+                score = float(np.sum(a*b)/max(1e-9, np.linalg.norm(a)*np.linalg.norm(b)))
+                scores.append(float(np.clip(score, -1, 1)))
+            if min(scores) > min(best):
+                best = tuple(scores)
+        candidates.append((min(best), str(int(sample.value)), best, sample.identifier))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    score, label, views, identifier = candidates[0]
+    other = max((s for s, value, _, _ in candidates if value != label), default=0.)
+    if score < max(.97, threshold) or score-other < .1:
+        return None
+    return {"results": [(label, support) for support in views],
+            "analog_policy": "verified_sector_reference", "sector_reference_id": identifier,
+            "recognition_sources": ["Verified sector · inner band", "Verified sector · outer band"],
+            "sector_reference_scores": list(views)}

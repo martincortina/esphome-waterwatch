@@ -265,6 +265,16 @@ function updateDigitControls() {
   for(const [id,key] of [["landmarkX","x"],["landmarkY","y"],["landmarkW","w"],["landmarkH","h"]])if(document.activeElement!==$(id))$(id).value=Number(((anchors[selectedLandmark]?.[key]||0)*100).toFixed(4));
   $("alignmentEnabled").disabled=busy || !alignment?.reference_id || alignment.anchors.length!==2;
   $("landmarkStatus").textContent=landmarkTarget!==null?`Drag a box around fixed landmark ${landmarkTarget+1}. Escape cancels.`:!alignment?.reference_id?"No reference saved.":`${alignment.anchors.length}/2 landmarks marked${alignment.enabled?" · Alignment enabled":""}.`;
+  updateRecognitionControls();
+}
+function updateRecognitionControls(){
+  const roi=current?.config.rois[selectedDigit],ready=digitEditorReady(),analog=roi?.kind==="analog",digital=Boolean(roi&&!analog);
+  $("regionRecognition").disabled=!ready||!digital;
+  $("teachWheel").disabled=!ready||!digital||!sourceBlob||showingOriginal||(roi?.visual_references?.length||0)>=32;
+  $("clearWheelReferences").disabled=!ready||!digital||!roi?.visual_references?.length;
+  $("teachDial").disabled=!ready||!analog||!sourceBlob||showingOriginal||(roi?.visual_references?.length||0)>=32;
+  $("dialIncluded").disabled=!ready||!analog;
+  if(ready&&analog&&roi.include_in_reading===false){try{$("dialIncluded").disabled=!DialTools.scalePlan(editedConfig(),selectedDigit).can_include;}catch{$("dialIncluded").disabled=true;}}
 }
 function renderDigitSelection() {
   const count=current?.config.rois.length || 0;
@@ -275,6 +285,7 @@ function renderDigitSelection() {
   if(document.activeElement!==$("digitAngle"))$("digitAngle").value=current?.config.rois[selectedDigit]?.rotation_degrees || 0;
   for(const [id,key] of [["digitX","x"],["digitY","y"],["digitW","w"],["digitH","h"]])if(document.activeElement!==$(id))$(id).value=Number(((current?.config.rois[selectedDigit]?.[key]||0)*100).toFixed(4));
   renderAnalogEditor();
+  renderWheelEditor();
   updateDigitControls();
 }
 function resetDigitEditor() { dialMark=null;selectedDigit=-1;selectedLandmark=-1;landmarkTarget=null;$("editGroup").checked=false;digitDrag=null;startPoint=null;draftPoint=null;digitUndo=[];digitRedo=[];digitMode=current?.config.rois.length?"edit":"add";renderDigitSelection(); }
@@ -342,25 +353,60 @@ $("applyDigitGeometry").onclick=()=>{
   if(roi.w<minimum.w || roi.h<minimum.h || !RoiGeometry.inside(roi,digitSize())){message("Keep the full rotated box inside the image and at least 9 image pixels wide/high.",true);return;}
   const before=digitSnapshot();current.config.rois[selectedDigit]=roi;commitDigitEdit(before);
 };
-$("duplicateDigit").onclick=()=>{if(!digitEditorReady() || !current.config.rois[selectedDigit] || current.config.rois.length>=12)return;const before=digitSnapshot(),copy=RoiGeometry.move(current.config.rois[selectedDigit],.01,.01,digitSize());if(copy.kind==="analog")copy.include_in_reading=false;current.config.rois.splice(selectedDigit+1,0,copy);selectedDigit++;commitDigitEdit(before);};
+$("duplicateDigit").onclick=()=>{if(!digitEditorReady() || !current.config.rois[selectedDigit] || current.config.rois.length>=12)return;const before=digitSnapshot(),copy=RoiGeometry.move(current.config.rois[selectedDigit],.01,.01,digitSize());copy.visual_references=[];if(copy.kind==="analog")copy.include_in_reading=false;current.config.rois.splice(selectedDigit+1,0,copy);selectedDigit++;commitDigitEdit(before);};
 $("editGroup").onchange=()=>{if($("editGroup").checked && selectedDigit<0)selectedDigit=0;drawPreview();};
 function renderAnalogEditor() {
   const roi=current?.config.rois[selectedDigit],analog=roi?.kind==="analog";
   $("analogEditor").hidden=!analog;document.body.dataset.regionSelected=String(selectedDigit>=0);document.body.dataset.selectedRegionKind=analog||digitMode==="add_analog"?"analog":"digit";
   if(!analog)return;
   const dial=roi.dial||DialTools.defaults();
+  $("dialReferenceCount").textContent=`${roi.visual_references?.filter(r=>r.kind==="sector").length||0} verified digit photos · private`;
+  $("teachDial").disabled=busy||!sourceBlob||showingOriginal||!digitEditorReady()||(roi.visual_references?.length||0)>=32;
   for(const [id,value] of Object.entries({dialColor:dial.pointer_color,dialDirection:dial.clockwise?"cw":"ccw",dialZero:dial.zero_angle_degrees,dialRadius:dial.radius*100,dialCenterX:dial.center_x*100,dialCenterY:dial.center_y*100}))if(document.activeElement!==$(id))$(id).value=Number.isFinite(value)?Number(value.toFixed(3)):value;
   $("dialIncluded").checked=roi.include_in_reading!==false;
   $("analogPlacement").textContent=roi.include_in_reading===false?"Preview only · total unchanged":"Included at configured precision";
-  const included=current.config.rois.filter(r=>r.include_in_reading!==false),position=included.indexOf(roi);
-  const exponent=position<0?-Number($("decimals").value)-1:included.length-Number($("decimals").value)-1-position;
-  const step=10**exponent;
-  $("dialStep").placeholder=`Confirm ${step.toFixed(Math.max(0,-exponent))} m³ per step`;
-  $("dialStep").readOnly=position>=0;
-  if(position>=0)$("dialStep").value=step.toFixed(Math.max(0,-exponent));
-  else if($("dialStep").dataset.region!==String(selectedDigit))$("dialStep").value="";
-  $("dialStep").dataset.region=String(selectedDigit);
+  $("dialStep").readOnly=true;
+  try{
+    const plan=DialTools.scalePlan(editedConfig(),selectedDigit),litres=Number((plan.step*1000).toPrecision(9));
+    $("dialStep").value=`${plan.step.toFixed(plan.places)} m³ / step = ${litres} L / step`;
+    $("dialScaleSummary").textContent=`Dial ${plan.ordinal} · ×0.1 of ${plan.ordinal===1?"the last number wheel":`dial ${plan.ordinal-1}`}`;
+    $("dialHint").textContent=plan.reason||`Confirm ×0.1 and include this dial to add the next decimal. One full turn = ${Number((litres*10).toPrecision(9))} L. Add further dials from coarse to fine.`;
+    $("dialIncluded").disabled=busy||!digitEditorReady()||roi.include_in_reading===false&&!plan.can_include;
+  }catch(error){$("dialStep").value="";$("dialScaleSummary").textContent="Check reading order";$("dialHint").textContent=error.message;$("dialIncluded").disabled=true;}
 }
+function renderWheelEditor(){
+  const roi=current?.config.rois[selectedDigit],digit=roi&&roi.kind!=="analog";
+  $("wheelEditor").hidden=!digit;
+  if(!digit)return;
+  $("regionRecognition").value=roi.recognition_mode||"auto";
+  $("regionRecognition").disabled=busy||!digitEditorReady();
+  $("wheelReferenceCount").textContent=`${roi.visual_references?.length||0}/32 verified photos · private`;
+  $("teachWheel").disabled=busy||!sourceBlob||showingOriginal||!digitEditorReady()||(roi.visual_references?.length||0)>=32;
+  $("clearWheelReferences").disabled=busy||!digitEditorReady()||!roi.visual_references?.length;
+}
+$("regionRecognition").onchange=()=>{if(!digitEditorReady())return;const roi=current.config.rois[selectedDigit];if(!roi||roi.kind==="analog")return;const before=digitSnapshot();roi.recognition_mode=$("regionRecognition").value;commitDigitEdit(before);};
+$("teachWheel").onclick=act(async()=>{
+  const index=selectedDigit,image=sourceBlob,value=Number($("verifiedWheelDigit").value);
+  if(!image||!current?.config.rois[index]||current.config.rois[index].kind==="analog")throw new Error("Select a number wheel and take a photo first.");
+  if(!/^\d$/.test($("verifiedWheelDigit").value)||value<0||value>9)throw new Error("Enter the physically verified completed digit, from 0 to 9.");
+  if((current.config.rois[index].visual_references?.length||0)>=32)throw new Error("This wheel already has 32 reference photos.");
+  if(dirty)await saveConfiguration(false);
+  const saved=await(await api(`/api/meters/${selected()}/recognition-reference?region=${index}&value=${value}`,{method:"POST",body:image,headers:{"Content-Type":image.type}})).json();
+  const roi=current.config.rois[index];roi.visual_references??=[];roi.visual_references.push(saved.reference);roi.recognition_mode="calibrated";
+  selectedDigit=index;await saveConfiguration(false);selectedDigit=index;renderDigitSelection();
+  message("Verified wheel photo saved. Learned mode uses matching references or agreement from both text models and the wheel model. History is unchanged.");
+});
+$("clearWheelReferences").onclick=()=>{if(!digitEditorReady())return;const roi=current.config.rois[selectedDigit];if(!roi||roi.kind==="analog")return;const before=digitSnapshot();roi.visual_references=[];commitDigitEdit(before);};
+$("teachDial").onclick=act(async()=>{
+  const index=selectedDigit,image=sourceBlob,value=Number($("verifiedDialDigit").value);
+  if(!image||current?.config.rois[index]?.kind!=="analog")throw new Error("Select a dial and take a photo first.");
+  if(!/^\d$/.test($("verifiedDialDigit").value))throw new Error("Enter the physically verified completed dial digit, from 0 to 9.");
+  if((current.config.rois[index].visual_references?.length||0)>=32)throw new Error("This dial already has 32 reference photos.");
+  if(dirty)await saveConfiguration(false);
+  const saved=await(await api(`/api/meters/${selected()}/recognition-reference?region=${index}&value=${value}&kind=sector`,{method:"POST",body:image,headers:{"Content-Type":image.type}})).json();
+  current.config.rois[index].visual_references??=[];current.config.rois[index].visual_references.push(saved.reference);
+  await saveConfiguration(false);selectedDigit=index;renderDigitSelection();message("Verified dial digit saved. It applies only to matching pointer poses; other positions still need their own image evidence.");
+});
 function updateDial() {
   const roi=current?.config.rois[selectedDigit];if(!digitEditorReady()||roi?.kind!=="analog")return;
   const next={center_x:Number($("dialCenterX").value)/100,center_y:Number($("dialCenterY").value)/100,radius:Number($("dialRadius").value)/100,zero_angle_degrees:Number($("dialZero").value),clockwise:$("dialDirection").value==="cw",pointer_color:$("dialColor").value};
@@ -375,11 +421,8 @@ $("dialIncluded").onchange=()=>{
   const before=digitSnapshot();
   try{
     let layout;
-    if($("dialIncluded").checked)layout=DialTools.includePlan(editedConfig(),selectedDigit,$("dialStep").value);
-    else{
-      if(current.config.rois.slice(selectedDigit+1).some(r=>r.include_in_reading!==false)||Number($("decimals").value)<1)throw new Error("Only the last decimal dial can be removed from the total here.");
-      layout={decimal_places:Number($("decimals").value)-1,ignored_decimal_digits:Math.min(Number($("ignoredDecimals").value),Number($("decimals").value)-1)};
-    }
+    if($("dialIncluded").checked)layout=DialTools.includePlan(editedConfig(),selectedDigit,"previous/10");
+    else layout=DialTools.removePlan(editedConfig(),selectedDigit);
     roi.include_in_reading=$("dialIncluded").checked;$("decimals").value=current.config.decimal_places=layout.decimal_places;$("ignoredDecimals").value=current.config.ignored_decimal_digits=layout.ignored_decimal_digits;renderPrecision();commitDigitEdit(before);
   }catch(error){$("dialIncluded").checked=roi.include_in_reading!==false;message(error.message,true);}
 };
@@ -704,6 +747,7 @@ async function renderResult(result, testOnly) {
   if(result.reason==="baseline_required"&&!problem)$("resultAdvice").textContent="Set a baseline from the physical meter to start recording.";
   if(result.reason==="preview_only")$("resultAdvice").textContent="The dial is for inspection only. Confirm its scale in Setup before including it in the total.";
   if(problem?.kind==="analog")$("resultAdvice").textContent="Check the dial centre, zero tick and pointer colour in Setup. Competing pointers or a position near a numbered tick stay uncertain.";
+  if(problem?.wheel_policy==="calibration_required")$("resultAdvice").textContent=`Digit ${problem.digit+1} needs a verified example for this position. Open Setup, select the wheel, then use Teach a difficult wheel with its physically verified completed digit.`;
   $("digitSummary").textContent=`${used.filter(d=>verifiedStatuses.has(d.status)).length}/${used.length} reading regions verified${digits.some(d=>d.included_in_total===false)?" · preview dial separate":""}`;
   const {images,...summary}=result;$("testResult").textContent=JSON.stringify(summary,null,2);
   $("viewTestPhoto").hidden=!images?.original;

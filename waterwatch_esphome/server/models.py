@@ -52,6 +52,13 @@ class VisualReference(StrictModel):
     id: str = Field(pattern=r"^[a-f0-9]{32}$")
     value: float = Field(ge=0, lt=10)
     uncertainty: float = Field(default=0, ge=0, le=.49)
+    kind: Literal["position", "sector"] = "position"
+
+    @model_validator(mode="after")
+    def sector_label(self):
+        if self.kind == "sector" and (not self.value.is_integer() or self.uncertainty):
+            raise ValueError("A sector reference needs a completed integer digit without angle uncertainty")
+        return self
 
 
 class ROI(StrictModel):
@@ -64,7 +71,8 @@ class ROI(StrictModel):
     kind: Literal["digit", "analog"] = "digit"
     dial: DialConfig | None = None
     include_in_reading: bool = True
-    visual_references: list[VisualReference] = Field(default_factory=list, max_length=8)
+    recognition_mode: Literal["auto", "text", "rolling", "calibrated"] = "auto"
+    visual_references: list[VisualReference] = Field(default_factory=list, max_length=32)
 
     @model_validator(mode="after")
     def bounds(self):
@@ -72,7 +80,9 @@ class ROI(StrictModel):
             raise ValueError("ROI must be inside the image")
         if self.kind == "analog" and self.dial is None:
             self.dial = DialConfig()
-        if self.kind == "digit" and any(not ref.value.is_integer() or ref.uncertainty for ref in self.visual_references):
+        if self.kind == "analog" and self.recognition_mode != "auto":
+            raise ValueError("Wheel recognition mode applies only to number wheels")
+        if self.kind == "digit" and any(not ref.value.is_integer() or ref.uncertainty or ref.kind != "position" for ref in self.visual_references):
             raise ValueError("Digit references need an integer label without phase uncertainty")
         return self
 

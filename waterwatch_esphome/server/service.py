@@ -120,18 +120,20 @@ class Service:
     def visual_geometry(self, cfg, index):
         roi = cfg.rois[index]
         return {**self.reference_geometry(cfg),
-                "alignment": cfg.alignment.model_dump(),
-                "roi": roi.model_dump(exclude={"visual_references", "include_in_reading"})}
+                "alignment": cfg.alignment.model_dump(exclude={"anchors": {"__all__": {"recognition_mode"}}}),
+                "roi": roi.model_dump(exclude={"visual_references", "include_in_reading", "recognition_mode"})}
 
-    def save_visual_reference(self, meter_id, index, value, uncertainty, data):
+    def save_visual_reference(self, meter_id, index, value, uncertainty, data, kind="position"):
         with self.processing:
             cfg = self.store.config(meter_id)
             if not 0 <= index < len(cfg.rois):
                 raise ValueError("Choose an existing region")
-            label = VisualReference(id=uuid.uuid4().hex, value=value, uncertainty=uncertainty)
+            label = VisualReference(id=uuid.uuid4().hex, value=value, uncertainty=uncertainty, kind=kind)
             roi = cfg.rois[index]
             if roi.kind == "digit" and (not label.value.is_integer() or label.uncertainty):
                 raise ValueError("A digit reference requires a verified integer label")
+            if roi.kind == "digit" and kind != "position":
+                raise ValueError("Sector references apply only to pointer dials")
             image = self.transform(data, cfg)
             patch = crop_digit(image, roi)
             ok, encoded = cv2.imencode(".png", patch)
@@ -152,11 +154,16 @@ class Service:
             if not path.is_file() or not path.with_suffix(".json").is_file():
                 continue
             metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-            if metadata.get("geometry") != self.visual_geometry(cfg, index) or metadata.get("label") != label.model_dump():
+            saved_label = metadata.get("label")
+            if not isinstance(saved_label, dict):
+                continue
+            saved_label = saved_label.copy()
+            saved_label.setdefault("kind", "position")
+            if metadata.get("geometry") != self.visual_geometry(cfg, index) or saved_label != label.model_dump():
                 continue
             image = cv2.imread(str(path))
             if image is not None:
-                samples.append(ReferenceSample(image, label.value, label.uncertainty, label.id))
+                samples.append(ReferenceSample(image, label.value, label.uncertainty, label.id, label.kind))
         return samples
 
     def validate_alignment(self, cfg):

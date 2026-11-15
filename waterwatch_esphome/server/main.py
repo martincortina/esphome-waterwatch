@@ -80,7 +80,7 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
 
     app = FastAPI(
         title="WaterWatch",
-        version="0.12.3",
+        version="0.13.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -256,11 +256,12 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
         region: Annotated[int, Query(ge=0, le=11)],
         value: Annotated[float, Query(ge=0, lt=10)],
         uncertainty: Annotated[float, Query(ge=0, le=.49)] = 0,
+        kind: Literal["position", "sector"] = "position",
     ):
         config(meter_id)
         data = await image_body(request)
         try:
-            return await run_in_threadpool(service.save_visual_reference, meter_id, region, value, uncertainty, data)
+            return await run_in_threadpool(service.save_visual_reference, meter_id, region, value, uncertainty, data, kind)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
 

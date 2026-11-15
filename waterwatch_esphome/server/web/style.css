@@ -37,3 +37,5 @@ body[data-selected-region-kind=analog] #calibrationTools>.roi-frame-tools{displa
 body[data-workspace-view=capture][data-has-baseline=false] #cameraCapture{display:none}@media(max-width:760px){body[data-workspace-view=capture] .stats article:nth-child(2),body[data-workspace-view=capture] .stats article:nth-child(3),body[data-workspace-view=capture] .status-group,body[data-workspace-view=capture] #captureStatus{display:none}body[data-workspace-view=capture] .result-card .result-advice{font-size:11px}body[data-workspace-view=capture] #resultConfidence{font-size:11px}}
 
 .digit-result.reference_verified,.digit-result.analog_position_verified,.digit-result.analog_verified{border-top-color:var(--accent)}
+
+.wheel-editor{padding:10px;border:1px solid var(--line);border-radius:6px;margin:8px 0}.wheel-editor p{margin-top:5px}.dial-scale-summary{font-weight:600;color:var(--accent);margin-top:8px}

@@ -172,3 +172,32 @@ def test_preview_dial_after_rolling_wheel_cannot_shift_its_position_or_scale(ima
     assert result.raw_value == "1.7" and result.confidence == .98
     assert result.details["digits"][1]["status"] == "rolling_verified"
     assert result.details["digits"][2]["used_for_reading"] is False
+
+
+def test_explicit_rolling_mode_applies_to_a_higher_wheel_during_a_carry(image):
+    class HigherText:
+        def __init__(self):self.values=iter([('2', .4)]*2+[('7', .99)]*2)
+        def digit(self, patch):return next(self.values)
+    cfg=configuration()
+    cfg.rois[0].recognition_mode='rolling'
+    result=Pipeline(HigherText(),wheel_engine=Wheel()).run(image,cfg)
+    assert result.raw_value=='7.7'
+    assert result.details['digits'][0]['status']=='rolling_verified'
+    assert result.details['digits'][1]['status']=='agreed'
+
+
+def test_learned_wheel_uses_a_verified_pattern_and_rejects_an_unseen_pose(image):
+    from server.models import VisualReference
+    from server.ocr import decode,crop_digit
+    from server.reference_ocr import ReferenceSample
+
+    cfg=configuration();cfg.rois[1].recognition_mode='calibrated'
+    cfg.rois[1].visual_references=[VisualReference(id='a'*32,value=9)]
+    sample=ReferenceSample(crop_digit(decode(image),cfg.rois[1]),9,identifier='a'*32)
+    result=Pipeline(TextEngine(),wheel_engine=Wheel(),recognition_loader=lambda c,i:[sample] if i==1 else []).run(image,cfg)
+    assert result.raw_value=='1.9'
+    assert result.details['digits'][1]['wheel_policy']=='calibrated_reference_verified'
+    assert result.details['digits'][1]['wheel_model_recognitions']==[('7',.98)]*2
+    missing=Pipeline(TextEngine(),wheel_engine=Wheel(),recognition_loader=lambda c,i:[]).run(image,cfg)
+    assert missing.raw_value=='1.?'
+    assert missing.details['digits'][1]['wheel_policy']=='calibration_required'

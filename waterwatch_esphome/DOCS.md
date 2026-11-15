@@ -354,9 +354,12 @@ For a numbered 0–9 dial with a directional red or dark pointer:
 4. Confirm the printed multiplier **per numbered step**, not per full revolution.
    If the current counter has three decimals, the next dial must be 0.0001 m³ per
    step (0.1 L); a full numbered 0–9 revolution then spans 0.001 m³ (1 L).
-   Enter that verified scale and select **Include in total**. This appends exactly
-   one decimal and explicitly selects full precision. A mismatched scale is
-   refused. Only sequential decimal dials are supported by this UI.
+   The UI calculates this scale. Select **Confirm ×0.1 & include in total** and
+   save. This appends one decimal and selects full precision. Use **Add next dial
+   ×0.1** for another dial, draw its region and confirm inclusion in reading order.
+   With three counter decimals, successive dial steps are 0.1 L, 0.01 L and 0.001 L.
+   The total supports up to six decimal places in m³; finer dials may be previewed.
+   Verify the physical ratio before confirming; arbitrary multipliers are unsupported.
 5. Undo restores the region and its decimal layout. Duplicated dials start as
    preview-only. Removing the last included decimal dial restores the prior
    precision. Check the reading again before enabling automatic capture.
@@ -382,7 +385,7 @@ administrator can attach private, physically verified reference crops to a regio
 `POST /api/meters/{id}/recognition-reference?region=0&value=1` accepts a source
 JPEG/PNG and returns a reference descriptor. Append that descriptor to the region's
 `visual_references` in its saved configuration. Region indices start at zero;
-each region supports at most eight references. Digital labels must be integers
+each region supports at most 32 references. Digital labels must be integers
 with no uncertainty. A pointer label is a position on its 0–9 scale and can include
 an explicit `uncertainty` up to 0.49. Use several distinct calibration photos;
 reserve fresh photos for validation. Never label an unknown digit by its OCR result.
@@ -443,3 +446,33 @@ both independently trained character models support the same number at the
 configured threshold. An isolated text-model guess is retained in diagnostics.
 Adapters without independent model evidence retain the conservative text veto.
 This policy does not relax near-integer carry checks or round the next digit up.
+
+
+## Dial chains and individual wheel recognition (0.13.0)
+
+In **Setup**, select a number wheel and choose its recognition mode. **Rolling**
+uses phase recognition even for a higher wheel during a carry. A wheel moving
+from 5 to 6 contributes the completed digit 5; a 9-to-0 transition contributes 9
+until the carry has completed. Do not round an incomplete wheel up.
+
+If distortion makes the generic phase model consistently recognize the wrong
+pair, use **Teach a verified wheel photo**. Take a photo, enter the physically
+verified completed digit (0–9), and save it. This selects **Learned** mode for
+that region. Use several distinct poses for each digit. A matching reference
+uses measured foreground/edge agreement; an unseen pose requires agreement of
+both independent text models with the phase model or remains uncertain. A
+reference is not a replacement for validation on fresh images.
+
+For a difficult dial, **Teach a difficult dial position** saves its completed
+integer digit as a private sector reference. For example, a pointer between 6
+and 7 has completed digit 6. This labels a sector, not an exact angle of 6.0.
+Only matching absolute pointer poses qualify in both angular bands; arbitrary
+rotations do not inherit the label. The API uses `kind=sector`; its existing
+`kind=position` references retain their prior position/uncertainty semantics.
+
+Teaching a reference does not record consumption, change a baseline or publish
+MQTT. Up to 32 references per region are supported. Photos and calibration stay
+in private app storage and backups. Recheck references after moving the camera
+or changing region geometry. Reserve fresh photos and different wheel/dial
+positions for accuracy checks; reusing the calibration photo measures only a
+calibration round trip.
