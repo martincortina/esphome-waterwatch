@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.3
+
+- Require agreement from independent English and Latin character models before
+  their unrelated digit can veto a qualified mid-transition wheel result.
+  An isolated character-model guess cannot override two agreeing phase views.
+- Preserve phase confidence, angular agreement, carry guards and raw text evidence.
+  Adapters without independent model evidence keep the conservative veto.
+- Keep a verified wheel's transition labels consistent with its phase result.
+
 ## 0.12.2
 
 - Add a corroborated contrast comparison for static digits affected by uneven

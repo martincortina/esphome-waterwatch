@@ -432,3 +432,14 @@ Coarse labels must carry their uncertainty: for example, a verified position
 between 3 and 4 can be represented as 3.5 with uncertainty 0.49. Such a reference
 supports an approximate preview, not an exact decimal measurement. Confirm the
 physical multiplier and verify other positions before adding the dial to totals.
+
+### Character disagreement on a split wheel (0.12.3)
+
+A partial pair of numbers can look like an unrelated character to ordinary OCR.
+For an interior wheel transition, two agreeing phase views still need the full
+configured confidence and carry checks. When both English and Latin character
+models are available, a competing unrelated number vetoes that result only if
+both independently trained character models support the same number at the
+configured threshold. An isolated text-model guess is retained in diagnostics.
+Adapters without independent model evidence retain the conservative text veto.
+This policy does not relax near-integer carry checks or round the next digit up.

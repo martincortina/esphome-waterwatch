@@ -36,7 +36,7 @@ def phase_evidence(logits):
             "center_score": float(scores[center_indices].sum())}
 
 
-def resolve_wheel(views, text_results, raw_text, threshold):
+def resolve_wheel(views, text_results, raw_text, threshold, model_groups=None):
     """Require consistent phase views; never round a transition into its next digit.
 
     A guard of 0.2 digit either side of a boundary prevents a phase error from
@@ -67,7 +67,20 @@ def resolve_wheel(views, text_results, raw_text, threshold):
         return rejected, detail
     digit = digits[0]
     following = str((int(digit)+1) % 10)
-    if any(d is not None and d not in {digit, following} and s >= threshold for d, s in raw_text):
+    conflicting = {d for d, s in raw_text if d is not None and d not in {digit, following} and s >= threshold}
+    # Character OCR is outside its normal domain on a split wheel. Require the
+    # independently trained English and Latin models to agree before their
+    # competing class can veto two qualifying phase views. Adapters without
+    # independent model evidence retain the original conservative veto.
+    if model_groups is not None and len(model_groups) >= 2:
+        detail["wheel_text_veto_policy"] = "independent_model_agreement"
+        blocked = any(all(any(value == candidate and score >= threshold for value, score in group)
+                          for group in model_groups) for candidate in conflicting)
+        if conflicting:
+            detail["wheel_text_disagreements"] = sorted(conflicting)
+    else:
+        blocked = bool(conflicting)
+    if blocked:
         return rejected, detail
     detail.update(wheel_policy="transition_verified", possible_transition=[digit, following])
     return [(digit, v["score"]) for v in views], detail

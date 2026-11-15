@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from server.models import ROI, MeterConfig
-from server.neural_ocr import NeuralOCRError
+from server.neural_ocr import NeuralOCRError, RowRecognition
 from server.ocr import Pipeline
 from server.wheel_ocr import WheelOCREngine, phase_evidence, resolve_wheel
 
@@ -46,6 +46,52 @@ def test_low_support_or_nonadjacent_high_score_text_rejects_transition():
     for views, raw in [([view(7.4, .84), view(7.5)], []),
                        ([view(7.4), view(7.5)], [("3", .96)])]:
         assert resolve_wheel(views, [(None, 0)]*2, raw, .85)[0] == [(None, 0)]*2
+
+
+def test_isolated_character_model_error_does_not_veto_qualified_wheel_transition():
+    views = [view(2.4, .9994), view(2.4, .9996)]
+    english = [('5', .8033), ('5', .7153)]
+    latin = [('4', .4479), ('3', .4239), ('4', .6944)]
+    results, detail = resolve_wheel(views, [(None, 0)]*2, english+latin, .8,
+                                    model_groups=[english, latin])
+    assert results == [('2', .9994), ('2', .9996)]
+    assert detail['wheel_policy'] == 'transition_verified'
+    assert detail['wheel_text_disagreements'] == ['5']
+    assert detail['wheel_text_veto_policy'] == 'independent_model_agreement'
+    # Neither lower phase support nor a carry-boundary position is relaxed.
+    assert resolve_wheel([view(2.4, .79), views[1]], [], english+latin, .8,
+                         model_groups=[english, latin])[0] == [(None, 0)]*2
+    assert resolve_wheel([view(2.9), view(3.)], [], english+latin, .8,
+                         model_groups=[english, latin])[0] == [(None, 0)]*2
+
+
+def test_two_independent_character_models_can_still_veto_a_wrong_phase_class():
+    english, latin = [('5', .96), ('5', .9)], [('5', .95), ('5', .91)]
+    results, detail = resolve_wheel([view(2.4), view(2.5)], [(None, 0)]*2,
+                                    english+latin, .8, model_groups=[english, latin])
+    assert results == [(None, 0)]*2 and detail['wheel_policy'] == 'uncertain'
+
+
+def test_pipeline_uses_independent_text_models_and_keeps_verified_transition_labels(image):
+    class Text:
+        def recognize_digits(self, patches, valid):
+            return RowRecognition([[('1', .99), ('1', .98)], [(None, 0)]*2], patches[0], {
+                'recognition_evidence': [
+                    {'primary_recognitions': [('1', .99), ('1', .98)], 'assist_recognitions': [('1', .95)]},
+                    {'primary_recognitions': [('5', .8033), ('5', .7153)], 'assist_recognitions': [('4', .6944)]}
+                ]})
+
+    class Phase:
+        def recognize(self, patch):
+            return [view(2.4, .9994), view(2.4, .9996)]
+
+    cfg = configuration()
+    cfg.last_decimal_mode = 'rolling'
+    cfg.min_confidence = .8
+    result = Pipeline(Text(), wheel_engine=Phase()).run(image, cfg)
+    assert result.raw_value == '1.2'
+    assert result.details['digits'][1]['possible_transition'] == ['2', '3']
+    assert result.details['digits'][1]['wheel_text_disagreements'] == ['5']
 
 
 def test_centered_digit_requires_actual_matching_text_not_phase_rounding_alone():

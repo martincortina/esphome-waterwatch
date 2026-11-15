@@ -304,7 +304,11 @@ class Pipeline:
                 diagnostics[-1]["text_recognitions"] = results
                 try:
                     views = self.wheel_engine.recognize(color)
-                    results, wheel_detail = resolve_wheel(views, results, raw_text, cfg.min_confidence)
+                    groups = ([diagnostics[-1]["primary_recognitions"], diagnostics[-1]["assist_recognitions"]]
+                              if "primary_recognitions" in diagnostics[-1] and "assist_recognitions" in diagnostics[-1]
+                              else None)
+                    results, wheel_detail = resolve_wheel(views, results, raw_text, cfg.min_confidence,
+                                                         model_groups=groups)
                     diagnostics[-1].update(wheel_detail)
                     diagnostics[-1]["recognitions"] = results
                     diagnostics[-1]["recognition_sources"] = ["Wheel · linear resize", "Wheel · area resize"]
@@ -360,7 +364,8 @@ class Pipeline:
                                for value, view in zip(values, views, strict=True)]
                     diagnostics[-1].update(recognitions=results, analog_digit_boundary=near_tick)
             choices = {r[0] for r in raw_text if r[0] is not None and r[1] >= .5}
-            if len(choices) == 2 and all(len(c) == 1 and c in "0123456789" for c in choices):
+            if (diagnostics[-1].get("wheel_policy") != "transition_verified" and len(choices) == 2
+                    and all(len(c) == 1 and c in "0123456789" for c in choices)):
                 for first in sorted(choices):
                     following = str((int(first)+1) % 10)
                     if following in choices:
