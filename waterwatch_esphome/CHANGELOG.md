@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.2
+
+- Add a corroborated contrast comparison for static digits affected by uneven
+  illumination. A strong numeric model view, reference correlation and edges must
+  agree; report their measured scores. Preserve the original reference matches
+  and all configured confidence checks. Rolling carry guards remain independent.
+- Hide rejected wheel estimates when a verified reference supplies the result.
+- Explain coarse pointer calibration separately from proximity to a numbered tick.
+- Document dial ellipse calibration and keeping reflective frame areas outside
+  digit regions. Meter-specific photos and calibrations remain private.
+
 ## 0.12.1
 
 - Correct whole-digit phase support around a centered rolling wheel.

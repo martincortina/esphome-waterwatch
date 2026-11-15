@@ -19,11 +19,16 @@ class ReferenceSample:
     identifier: str = ""
 
 
-def glyph_features(patch):
+def glyph_contrast(patch):
     gray = patch.min(axis=2)
     low, high = np.percentile(gray, (2, 98))
     gray = np.clip((gray.astype(float)-low)*255/max(1, high-low), 0, 255).astype(np.uint8)
     gray = cv2.resize(gray, (48, 80), interpolation=cv2.INTER_AREA)
+    return gray
+
+
+def glyph_features(patch):
+    gray = glyph_contrast(patch)
     foreground = (gray >= 140).astype(np.float32)
     edges = cv2.Canny(gray, 70, 140) > 0
     return cv2.GaussianBlur(foreground, (7, 7), 1.2), edges
@@ -37,16 +42,26 @@ def edge_agreement(first, second):
     return min(float(np.mean(distances[first] <= 2)), float(np.mean(reverse[second] <= 2)))
 
 
-def recognize_glyph(patch, samples, threshold):
+def recognize_glyph(patch, samples, threshold, corroborating=()):
     foreground, edges = glyph_features(patch)
+    contrast = glyph_contrast(patch).astype(np.float32)/255
     if foreground.sum() < 12:
         return None
     candidates = []
+    alternatives = []
+    contrast_candidates, contrast_alternatives = [], []
     for sample in samples:
         if not float(sample.value).is_integer():
             continue
         target, target_edges = glyph_features(sample.image)
+        target_contrast = glyph_contrast(sample.image).astype(np.float32)/255
+        target_centered = target_contrast-target_contrast.mean()
         best = (0., 0.)
+        correlated = None
+        label = str(int(sample.value))
+        support = [(score, index) for index, (value, score) in enumerate(corroborating)
+                   if value == label and score >= threshold]
+        model_score, model_index = max(support, default=(0., None))
         for dy in range(-2, 3):
             for dx in range(-2, 3):
                 transform = np.float32([[1, 0, dx], [0, 1, dy]])
@@ -56,17 +71,42 @@ def recognize_glyph(patch, samples, threshold):
                 edge_score = edge_agreement(target_edges, moved_edges)
                 if min(overlap, edge_score) > min(best):
                     best = overlap, edge_score
-        candidates.append((min(best), str(int(sample.value)), best, sample.identifier))
+                if model_index is not None and overlap >= .7 and edge_score >= max(.85, threshold):
+                    shifted = cv2.warpAffine(contrast, transform, (48, 80))
+                    shifted -= shifted.mean()
+                    denominator = float(np.linalg.norm(shifted)*np.linalg.norm(target_centered))
+                    correlation = float(np.sum(shifted*target_centered)/max(1e-9, denominator))
+                    correlation = float(np.clip(correlation, -1, 1))
+                    if correlation >= max(.90, threshold):
+                        score = min(correlation, edge_score)
+                        if correlated is None or score > correlated[0]:
+                            correlated = (score, correlation, edge_score, overlap)
+        alternatives.append((min(best), label))
+        if min(best) >= max(.85, threshold):
+            candidates.append((min(best), label, {
+                "results": [(label, s) for s in best], "reference_scores": list(best),
+                "reference_id": sample.identifier,
+                "recognition_sources": ["Verified reference · foreground", "Verified reference · edges"]}))
+        if correlated is not None:
+            score, correlation, edge_score, overlap = correlated
+            contrast_alternatives.append((score, label))
+            contrast_candidates.append((score, label, {
+                "results": [(label, model_score), (label, score)],
+                "reference_id": sample.identifier, "reference_method": "contrast_model_consensus",
+                "reference_model_support": {"view_index": model_index, "digit": label, "score": model_score},
+                "reference_scores": [correlation, edge_score], "reference_foreground_support": overlap,
+                "recognition_sources": ["Numeric model · corroborating view", "Verified reference · contrast and edges"]}))
+    if not candidates:
+        candidates = contrast_candidates
+        alternatives.extend(contrast_alternatives)
     if not candidates:
         return None
-    candidates.sort(reverse=True)
-    score, label, views, identifier = candidates[0]
-    other = max((s for s, value, _, _ in candidates if value != label), default=0.)
-    if score < max(.85, threshold) or score-other < .1:
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    score, label, result = candidates[0]
+    other = max((s for s, value in alternatives if value != label), default=0.)
+    if score-other < .1:
         return None
-    return {"results": [(label, s) for s in views], "reference_policy": "verified_glyph_shape",
-            "reference_id": identifier, "reference_scores": list(views),
-            "recognition_sources": ["Verified reference · foreground", "Verified reference · edges"]}
+    return {**result, "reference_policy": "verified_glyph_shape"}
 
 
 def pointer_polar(patch, cfg, inner, outer):

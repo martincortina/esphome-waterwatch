@@ -406,3 +406,29 @@ references; recapture and verify them after such changes. Removing descriptors
 from the configuration disables their use. References are calibration aids, not
 proof of accuracy at unseen positions. Test transitions, glare and moving pointers
 separately. A stationary 100-photo run measures repeatability at that state.
+
+### Uneven light and region geometry (0.12.2)
+
+For a static digit, a strong numeric model view can corroborate a reference when
+uneven illumination changes its binary foreground. The additional comparison
+requires at least 0.90 contrast correlation, 0.85 edge agreement, a foreground
+overlap floor and an independently qualifying numeric model vote for that label.
+The result reports the original numeric score and measured reference support;
+it does not raise a weak model score. Strong original reference matches retain
+their existing behavior. This additional route cannot bypass a rolling wheel's
+carry checks.
+
+Keep metal frame edges and large reflections outside each digit region. Confirm
+the outer box and its inner guides against the actual number window, including
+between-number positions. An oversized box can make the phase model treat a
+transition as a centered digit. Recheck after moving or enlarging a box; prior
+reference crops are tied to its geometry.
+
+For a dial seen at an angle, use a rectangular region around its elliptical face
+and place the center on the pointer pivot. The radius should follow the dial
+inside the printed scale on both axes. A square region centered elsewhere can
+make two angular bands disagree. Recreate references after changing this geometry.
+Coarse labels must carry their uncertainty: for example, a verified position
+between 3 and 4 can be represented as 3.5 with uncertainty 0.49. Such a reference
+supports an approximate preview, not an exact decimal measurement. Confirm the
+physical multiplier and verify other positions before adding the dial to totals.

@@ -42,6 +42,78 @@ def test_glyph_requires_measured_shape_and_reports_original_similarity():
     assert recognize_glyph(known, [ReferenceSample(known, 1), ReferenceSample(known, 7)], .8) is None
 
 
+def dim_glyph(value):
+    return np.clip(glyph(value).astype(float)*np.linspace(.1, 1., 100)[:, None, None], 0, 255).astype(np.uint8)
+
+
+def test_contrast_fallback_requires_independent_numeric_support_and_preserves_its_score():
+    sample = ReferenceSample(glyph(0), 0, identifier='a'*32)
+    image = dim_glyph(0)
+    assert recognize_glyph(image, [sample], .8) is None
+    assert recognize_glyph(image, [sample], .8, [('0', .79)]) is None
+    assert recognize_glyph(image, [sample], .8, [('8', .99)]) is None
+    found = recognize_glyph(image, [sample], .8, [('0', .83), ('0', .4)])
+    assert found['reference_method'] == 'contrast_model_consensus'
+    assert found['results'][0] == ('0', .83)
+    assert found['results'][1][1] >= .85
+    assert found['reference_scores'][0] >= .90
+    assert found['reference_foreground_support'] >= .7
+    # A confident original shape match is preserved, including its actual scores.
+    original = recognize_glyph(glyph(0), [sample], .8)
+    assert recognize_glyph(glyph(0), [sample], .8, [('0', .83)]) == original
+
+
+@pytest.mark.parametrize('label', range(10))
+def test_other_glyphs_reject_even_with_a_wrong_high_score_model_vote(label):
+    sample = ReferenceSample(glyph(label), label)
+    for value in range(10):
+        if value != label:
+            assert recognize_glyph(glyph(value), [sample], .8, [(str(label), .99)]) is None
+            assert recognize_glyph(dim_glyph(value), [sample], .8, [(str(label), .99)]) is None
+
+
+def test_pipeline_contrast_corroboration_keeps_actual_model_score():
+    from server.neural_ocr import RowRecognition
+
+    class Engine:
+        def recognize_digits(self, patches, valid):
+            return RowRecognition([[('0', .83), ('0', .4)]], patches[0], {
+                'recognition_evidence': [{'primary_recognitions': [('0', .83), ('0', .4)]}]})
+
+    cfg = MeterConfig(id='a', name='a', decimal_places=0, min_confidence=.8,
+        rois=[ROI(x=0, y=0, w=1, h=1, visual_references=[VisualReference(id='a'*32, value=0)])])
+    pipeline = Pipeline(Engine(), recognition_loader=lambda _, i: [ReferenceSample(glyph(0), 0)])
+    data = cv2.imencode('.png', dim_glyph(0))[1].tobytes()
+    result = pipeline.run(data, cfg)
+    assert result.raw_value == '0' and result.confidence == .83
+    assert result.details['digits'][0]['status'] == 'reference_verified'
+    assert result.details['digits'][0]['reference_method'] == 'contrast_model_consensus'
+
+
+def test_contrast_corroboration_cannot_bypass_a_weak_rolling_phase():
+    from server.neural_ocr import RowRecognition
+
+    class Engine:
+        def recognize_digits(self, patches, valid):
+            results = [[('1', .99), ('1', .98)], [('0', .83), ('0', .4)]]
+            return RowRecognition(results, patches[0], {
+                'recognition_evidence': [{'primary_recognitions': views} for views in results]})
+
+    class Wheel:
+        def recognize(self, patch):
+            return [{'phase': 0., 'completed_digit': '0', 'score': .5, 'center_score': .5}]*2
+
+    cfg = MeterConfig(id='a', name='a', decimal_places=1, min_confidence=.8,
+                      last_decimal_mode='rolling', rois=[ROI(x=0, y=0, w=.5, h=1),
+        ROI(x=.5, y=0, w=.5, h=1, visual_references=[VisualReference(id='a'*32, value=0)])])
+    pipeline = Pipeline(Engine(), wheel_engine=Wheel(),
+                        recognition_loader=lambda _, i: [ReferenceSample(glyph(0), 0)] if i==1 else [])
+    data = cv2.imencode('.png', np.hstack([glyph(1), dim_glyph(0)]))[1].tobytes()
+    result = pipeline.run(data, cfg)
+    assert result.raw_value == '1.?' and result.confidence == 0
+    assert result.details['digits'][1]['status'] == 'rolling_uncertain'
+
+
 @pytest.mark.parametrize('value', [n+.35 for n in range(10)])
 @pytest.mark.parametrize('clockwise', [True, False])
 def test_pointer_follows_rotation_instead_of_repeating_label(value, clockwise):

@@ -12,7 +12,7 @@ from PIL import Image
 from server.alignment import AlignmentError, register
 from server.analog_ocr import recognize_dial
 from server.models import ROI, MeterConfig
-from server.neural_ocr import NeuralOCREngine, NeuralOCRError
+from server.neural_ocr import ASSIST_VIEWS, NeuralOCREngine, NeuralOCRError
 from server.reference_ocr import recognize_glyph, recognize_pointer
 from server.wheel_ocr import WheelOCREngine, resolve_wheel
 
@@ -323,7 +323,11 @@ class Pipeline:
                 results[0][0] is not None and results[0][0] == results[1][0]
                 and min(score for _, score in results) >= cfg.min_confidence
             ):
-                reference_result = recognize_glyph(color, samples, cfg.min_confidence)
+                # A photometric fallback needs an independently strong numeric
+                # model view. Never use this route to bypass the rolling carry checks.
+                rolling = cfg.last_decimal_mode == "rolling" and index == last_digital
+                reference_result = recognize_glyph(color, samples, cfg.min_confidence,
+                                                   corroborating=() if rolling else raw_text)
                 if reference_result is not None:
                     label = reference_result["results"][0][0]
                     adjacent = {label, str((int(label)-1) % 10), str((int(label)+1) % 10)}
@@ -332,6 +336,16 @@ class Pipeline:
                     conflict = any(value is not None and value not in adjacent and score >= cfg.min_confidence
                                    for value, score in raw_text)
                     if not conflict:
+                        model_support = reference_result.get("reference_model_support")
+                        if model_support is not None:
+                            position = model_support["view_index"]
+                            primary_count = len(diagnostics[-1].get("primary_recognitions", results))
+                            source = ("English · "+["wide row", "wider row"][position]
+                                      if row_result is not None and position < min(2, primary_count)
+                                      else "Latin · "+ASSIST_VIEWS[position-primary_count][0]
+                                      if primary_count <= position < primary_count+len(ASSIST_VIEWS)
+                                      else "Text · view "+str(position+1))
+                            reference_result["recognition_sources"][0] = source
                         diagnostics[-1]["model_recognitions"] = results
                         results = reference_result.pop("results")
                         diagnostics[-1].update(reference_result, recognitions=results)
