@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.3
+
+- Retry an uncertain flash OCR capture with fresh photos, up to three attempts.
+  Every result comes entirely from one qualifying photo; never merge digits or
+  fill gaps with previous readings. Preserve confidence and validation checks.
+- Do not retry baseline, flow, timestamp or other validation rejections. Reject
+  repeated frames. Preserve per-flash cleanup and configuration-change guards.
+- Keep intermediate OCR checks out of history and MQTT. Record at most one final
+  result per cycle; expose attempt hashes/reasons/scores and retry counts in the UI.
+
 ## 0.13.2
 
 - Prefer the most precise physically verified pointer calibration among image

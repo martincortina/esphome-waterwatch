@@ -499,3 +499,20 @@ label uncertainty. Use match quality to break precision ties. Coarse labels such
 as 4.5 ±0.49 must not override a more precise reference solely because their
 correlation is slightly higher. Conflicting reference angles still reject the
 result; the selected reference retains its original scores and uncertainty.
+
+
+### Bounded flash retries (0.13.3)
+
+A flash capture may take up to three separate photos if OCR is ambiguous,
+unreadable, low-confidence or reports poor image quality. Each flash has the
+existing timeout and cleanup. A qualifying result uses all digits from one
+fresh photo; digits are never combined across frames or copied from history.
+Frozen/repeated images and changed configurations are rejected. Baseline, flow,
+timestamp and other validation rejections do not trigger additional photos.
+
+Intermediate OCR checks do not write readings or MQTT. A recorded cycle writes
+at most one final result; a test cycle writes none. Capture details list attempt
+image hashes, raw results, reasons and scores; the UI shows retry counts. If all
+three photos remain uncertain, the result stays rejected. When testing stability,
+report successful capture cycles separately from total OCR photos and retries;
+100 successful cycles do not mean every individual photo was readable.

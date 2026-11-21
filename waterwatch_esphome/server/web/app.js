@@ -739,6 +739,8 @@ async function renderResult(result, testOnly) {
   const digits=result.details?.digits || [],used=digits.filter(d=>d.used_for_reading!==false),agreed=used.filter(d=>d.recognitions?.[0]?.[0]!==null && d.recognitions?.[0]?.[0]===d.recognitions?.[1]?.[0] && d.recognitions?.length===2);
   const minimum=agreed.length?Math.min(...agreed.map(d=>Math.min(...d.recognitions.map(r=>r[1])))):null;
   $("resultConfidence").textContent=digits.length?`${used.filter(d=>verifiedStatuses.has(d.status)).length}/${used.length} verified${minimum===null?"":` · Lowest score ${(minimum*100).toFixed(1)}%`}${result.details?.ignored_decimal_digits?` · ${result.details.resolution_litres} L`:""}`:`${((result.confidence||0)*100).toFixed(1)}% confidence${testOnly?" · History unchanged":""}`;
+  const attempts=result.details?.capture?.attempts;
+  if(attempts?.length>1)$("resultConfidence").textContent+=` · ${attempts.length} photos (${attempts.length-1} retries)`;
   const problem=used.find(d=>!verifiedStatuses.has(d.status));
   $("reviewDigit").hidden=!problem;
   if(problem){$("reviewDigit").textContent=`Review digit ${problem.digit+1}`;$("reviewDigit").onclick=()=>reviewDigit(problem.digit);}

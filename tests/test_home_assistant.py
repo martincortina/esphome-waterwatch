@@ -9,7 +9,7 @@ from server.addon import AddonOptions, addon_settings
 from server.config import Settings
 from server.home_assistant import CameraCollector, CameraError, HomeAssistantCamera
 from server.main import create_app
-from server.models import ImageSource, MeterConfig
+from server.models import FlashConfig, ImageSource, MeterConfig
 from server.ocr import Recognition
 
 
@@ -130,6 +130,53 @@ def test_capture_dry_run_preserves_history_outbox_and_last_verified(client, imag
     assert client.service.summary() == before
     assert client.service.store.all("SELECT * FROM outbox") == outbox
     assert collector.status("house")["status"] == "test_complete"
+
+
+@pytest.mark.parametrize('test_only',[True,False])
+def test_flash_retries_uncertain_ocr_without_recording_intermediate_failures(client,image,test_only):
+    collector=attach(client,image)
+    cfg=client.service.store.config('house');cfg.source.flash=FlashConfig(light_entity='light.meter');client.service.save_config(cfg)
+    captured=[]
+    def snapshot(entity,**kwargs):
+        captured.append(len(captured));return image+bytes([len(captured)])
+    collector.camera.snapshot=snapshot
+    calls=[]
+    def run(data,cfg):
+        calls.append(data)
+        return Recognition(None,0,'ambiguous_digit') if len(calls)==1 else Recognition('123.457',.98,'candidate')
+    client.pipeline.run=run
+    before=client.service.store.all('SELECT * FROM readings');outbox=client.service.store.all('SELECT * FROM outbox')
+    result=collector.capture('house',test_only=test_only)
+    assert len(captured)==2 and result.get('would_accept',result.get('accepted'))
+    attempts=result['details']['capture']['attempts']
+    assert len(attempts)==2 and attempts[0]['reason']=='ambiguous_digit' and attempts[1]['reason']=='accepted'
+    assert attempts[0]['image_sha256']!=attempts[1]['image_sha256']
+    after=client.service.store.all('SELECT * FROM readings')
+    assert len(after)==len(before)+(0 if test_only else 1)
+    if test_only:assert client.service.store.all('SELECT * FROM outbox')==outbox
+
+
+def test_flash_retry_bound_and_validation_rejections(client,image):
+    collector=attach(client,image);cfg=client.service.store.config('house');cfg.source.flash=FlashConfig(light_entity='light.meter');client.service.save_config(cfg)
+    captured=[]
+    def snapshot(entity,**kwargs):
+        captured.append(1);return image+bytes([len(captured)])
+    collector.camera.snapshot=snapshot;client.pipeline.result=Recognition(None,0,'ambiguous_digit')
+    result=collector.capture('house')
+    assert len(captured)==3 and len(result['details']['capture']['attempts'])==3 and not result['would_accept']
+    client.pipeline.result=Recognition('999999.0',.99,'candidate');captured.clear()
+    result=collector.capture('house')
+    assert len(captured)==1 and result['reason']=='implausible_increase'
+
+
+def test_flash_retry_rejects_a_frozen_frame_without_writing_a_reading(client,image):
+    collector=attach(client,image);cfg=client.service.store.config('house');cfg.source.flash=FlashConfig(light_entity='light.meter');client.service.save_config(cfg)
+    collector.camera.snapshot=lambda entity,**kwargs:image
+    client.pipeline.result=Recognition(None,0,'ambiguous_digit')
+    before=client.service.store.all('SELECT * FROM readings')
+    with pytest.raises(CameraError,match='camera_repeated_frame'):
+        collector.capture('house',test_only=False)
+    assert client.service.store.all('SELECT * FROM readings')==before
 
 
 def test_capture_repeated_frame_survives_collector_restart(client, image):

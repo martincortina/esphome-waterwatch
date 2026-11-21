@@ -207,9 +207,40 @@ class CameraCollector:
             if cfg.source.kind != "home_assistant":
                 raise CameraError("home_assistant_camera_not_selected")
             try:
-                data = self._image(cfg)
-                captured_at = utcnow()
-                digest = hashlib.sha256(data).hexdigest()
+                attempts, seen = [], set()
+                # Retry uncertain OCR, never a validation/rate/baseline rejection.
+                # Each attempt has its own bounded flash and cleanup. No digit is
+                # filled from an earlier frame; the final result uses one photo.
+                for attempt in range(3 if cfg.source.flash else 1):
+                    data = self._image(cfg)
+                    captured_at = utcnow()
+                    digest = hashlib.sha256(data).hexdigest()
+                    if digest in seen:
+                        raise CameraError("camera_repeated_frame")
+                    seen.add(digest)
+                    metadata = {
+                        "camera_entity": cfg.source.camera_entity,
+                        "image_sha256": digest,
+                        "timestamp_basis": "home_assistant_retrieval",
+                        "flash": cfg.source.flash.model_dump() if cfg.source.flash else None,
+                    }
+                    with self.service.processing:
+                        if self.service.store.config(meter_id) != cfg:
+                            raise CameraError("configuration_changed_during_capture")
+                        if not test_only and self.service.store.camera_frame(meter_id, cfg.source.camera_entity) == digest:
+                            raise CameraError("camera_repeated_frame")
+                        if not cfg.source.flash:
+                            break
+                        checked = self.service.process(
+                            meter_id, "capture-check", captured_at, data, test_only=True,
+                            capture_metadata=metadata, include_images=include_images,
+                        )
+                    attempts.append({"image_sha256": digest, "raw_value": checked["raw_value"],
+                                     "reason": checked["reason"], "confidence": checked["confidence"]})
+                    if checked["reason"] not in {"ambiguous_digit", "unreadable", "low_confidence", "poor_image_quality"}:
+                        break
+                if attempts:
+                    metadata["attempts"] = attempts
                 # The proxy has no trustworthy exposure timestamp. An identical response
                 # must not make an old/frozen frame count as a fresh verified reading.
                 with self.service.processing:
@@ -217,16 +248,11 @@ class CameraCollector:
                         raise CameraError("configuration_changed_during_capture")
                     if not test_only and self.service.store.camera_frame(meter_id, cfg.source.camera_entity) == digest:
                         raise CameraError("camera_repeated_frame")
-                    result = self.service.process(
+                    result = checked if cfg.source.flash and test_only else self.service.process(
                         meter_id, f"ha-{uuid.uuid4().hex}", captured_at, data,
                         test_only=test_only,
                         include_images=include_images,
-                        capture_metadata={
-                            "camera_entity": cfg.source.camera_entity,
-                            "image_sha256": digest,
-                            "timestamp_basis": "home_assistant_retrieval",
-                            "flash": cfg.source.flash.model_dump() if cfg.source.flash else None,
-                        },
+                        capture_metadata=metadata,
                     )
                 self.statuses[meter_id] = {
                     "status": "test_complete" if test_only else "captured",
