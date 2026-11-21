@@ -251,7 +251,10 @@ def recognize_pointer(patch, cfg, samples, threshold):
             candidates.append((min(v["score"] for v in views), sample.identifier, views, policy))
     if not candidates:
         return None
-    candidates.sort(key=lambda item: item[0], reverse=True)
+    # A broad, approximate label must not displace a more precise calibration
+    # merely because its image correlation is marginally higher. Every candidate
+    # already passed the same score, peak-separation and two-band angle guards.
+    candidates.sort(key=lambda item: (max(v["uncertainty"] for v in item[2]), -item[0]))
     _, identifier, views, policy = candidates[0]
     # Two strong calibrations disagreeing about orientation must not be collapsed
     # to whichever fit is marginally larger.

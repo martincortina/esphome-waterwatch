@@ -167,6 +167,22 @@ def test_sector_reference_classifies_only_matching_absolute_pointer_poses():
     assert recognize_sector(image,DialConfig(),[sample,ReferenceSample(image,5,kind='sector')],.8) is None
 
 
+def test_pointer_prefers_precise_calibration_over_higher_scoring_coarse_label(monkeypatch):
+    import server.reference_ocr as module
+    monkeypatch.setattr(module,'pointer_polar',lambda image,*args:np.full((720,48),image[0,0,0],np.float32))
+    def match(current,known):
+        coarse=known[0,0]==10
+        return {'shift_degrees':216. if coarse else 21.6,'score':.99 if coarse else .96,'peak_margin':.2}
+    monkeypatch.setattr(module,'circular_match',match)
+    monkeypatch.setattr(module,'head_match',lambda *args:None)
+    samples=[ReferenceSample(np.full((100,100,3),10,np.uint8),4.5,.49,'coarse'),
+             ReferenceSample(np.full((100,100,3),20,np.uint8),0,.2,'precise')]
+    result=recognize_pointer(pointer(20),DialConfig(),samples,.8)
+    assert result['reference_id']=='precise'
+    assert all(view['score']==.96 and abs(view['phase']-.6)<1e-9 for view in result['analog_views'])
+    assert all(view['uncertainty']<.23 for view in result['analog_views'])
+
+
 def test_included_dial_can_use_a_verified_sector_without_inventing_a_precise_angle():
     cfg=MeterConfig(id='a',name='a',decimal_places=1,rois=[ROI(x=0,y=0,w=.5,h=1),
         ROI(x=.5,y=0,w=.5,h=1,kind='analog',visual_references=[VisualReference(id='a'*32,value=6,kind='sector')])])

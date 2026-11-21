@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.2
+
+- Prefer the most precise physically verified pointer calibration among image
+  matches that pass all existing guards. A slightly higher correlation from a
+  coarse label must not displace a finer calibration and make its digit uncertain.
+- Preserve measured match scores, two-band agreement and competing-angle rejection.
+  Sector matching and confidence thresholds are unchanged.
+
 ## 0.13.1
 
 - Stabilize private learned-wheel comparisons under flash and JPEG variation with

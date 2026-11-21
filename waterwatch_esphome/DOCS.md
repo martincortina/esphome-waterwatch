@@ -489,3 +489,13 @@ translated padding, and a differently labelled reference must remain at least
 0.10 below the chosen match. Diagnostics report the original model score and
 measured image correlations. Unmatched positions remain uncertain; this does not
 change ordinary text recognition or infer a value from previous readings.
+
+
+### Selecting pointer calibration precision (0.13.2)
+
+When several pointer position references pass the existing correlation,
+competing-peak and two-band angle checks, prefer the reference with the lowest
+label uncertainty. Use match quality to break precision ties. Coarse labels such
+as 4.5 ±0.49 must not override a more precise reference solely because their
+correlation is slightly higher. Conflicting reference angles still reject the
+result; the selected reference retains its original scores and uncertainty.
