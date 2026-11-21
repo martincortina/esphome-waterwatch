@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.1
+
+- Stabilize private learned-wheel comparisons under flash and JPEG variation with
+  measured contrast and signed-gradient correlation plus a qualifying numeric
+  model vote. Require at least 0.97 contrast, 0.93 gradient correlation, the
+  configured confidence and separation from differently labelled references.
+- Retain existing strict shape matching, carry guards and abstention for unknown
+  positions. Keep all calibration photos private; do not modify the reading ledger.
+
 ## 0.13.0
 
 - Calculate sequential dial scales as one tenth of the preceding wheel or dial.

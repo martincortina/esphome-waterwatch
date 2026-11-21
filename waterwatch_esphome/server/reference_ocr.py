@@ -110,6 +110,64 @@ def recognize_glyph(patch, samples, threshold, corroborating=()):
     return {**result, "reference_policy": "verified_glyph_shape"}
 
 
+def recognize_calibrated_glyph(patch, samples, threshold, corroborating):
+    """Require model support and two continuous image matches for learned wheels.
+
+    Binary edges can change sharply with JPEG noise on a thin reflective digit.
+    Contrast and signed gradients remain continuous. Neither a text vote alone
+    nor an unlabelled phase estimate can enable this private-reference route.
+    """
+    def features(image):
+        contrast = cv2.GaussianBlur(glyph_contrast(image).astype(np.float32)/255,
+                                    (3, 3), .7)
+        gradient = np.stack([cv2.Sobel(contrast, cv2.CV_32F, 1, 0),
+                             cv2.Sobel(contrast, cv2.CV_32F, 0, 1)], axis=2)
+        return contrast, gradient
+
+    def correlation(first, second):
+        # Do not reward padded borders introduced by the translation search.
+        first, second = first[3:-3, 3:-3], second[3:-3, 3:-3]
+        first, second = first-first.mean(), second-second.mean()
+        denominator = float(np.linalg.norm(first)*np.linalg.norm(second))
+        return float(np.clip(np.sum(first*second)/max(1e-9, denominator), -1, 1))
+
+    contrast, gradient = features(patch)
+    if float(contrast.std()) < .03:
+        return None
+    candidates, alternatives = [], []
+    for sample in samples:
+        if sample.kind != "position" or sample.uncertainty or not float(sample.value).is_integer():
+            continue
+        label = str(int(sample.value))
+        model_score = max((score for value, score in corroborating if value == label), default=0.)
+        target, target_gradient = features(sample.image)
+        best = (0., 0.)
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                transform = np.float32([[1, 0, dx], [0, 1, dy]])
+                moved = cv2.warpAffine(contrast, transform, (48, 80))
+                moved_gradient = cv2.warpAffine(gradient, transform, (48, 80))
+                scores = correlation(moved, target), correlation(moved_gradient, target_gradient)
+                if min(scores) > min(best):
+                    best = scores
+        alternatives.append((min(best), label))
+        if model_score >= threshold and best[0] >= max(.97, threshold) and best[1] >= max(.93, threshold):
+            candidates.append((min(best), label, {
+                "results": [(label, model_score), (label, min(best))],
+                "reference_id": sample.identifier,
+                "reference_policy": "verified_glyph_shape",
+                "reference_method": "calibrated_contrast_gradient_consensus",
+                "reference_scores": list(best), "reference_model_score": model_score,
+                "recognition_sources": ["Numeric model · corroborating view",
+                                        "Verified reference · contrast and gradients"]}))
+    if not candidates:
+        return None
+    score, label, result = max(candidates, key=lambda item: item[0])
+    if score-max((s for s, other in alternatives if other != label), default=0.) < .1:
+        return None
+    return result
+
+
 def pointer_polar(patch, cfg, inner, outer):
     # Continuous opponent colour survives flash white-balance changes that move
     # the same red pigment across a hard HSV threshold. Angular NCC below removes

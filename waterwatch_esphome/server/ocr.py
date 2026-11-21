@@ -13,7 +13,7 @@ from server.alignment import AlignmentError, register
 from server.analog_ocr import recognize_dial
 from server.models import ROI, MeterConfig
 from server.neural_ocr import ASSIST_VIEWS, NeuralOCREngine, NeuralOCRError
-from server.reference_ocr import recognize_glyph, recognize_pointer, recognize_sector
+from server.reference_ocr import recognize_calibrated_glyph, recognize_glyph, recognize_pointer, recognize_sector
 from server.wheel_ocr import WheelOCREngine, resolve_wheel
 
 
@@ -330,6 +330,8 @@ class Pipeline:
             if learned_wheel:
                 original_result = results
                 reference_result = recognize_glyph(color, samples, cfg.min_confidence) if samples else None
+                if reference_result is None and samples:
+                    reference_result = recognize_calibrated_glyph(color, samples, cfg.min_confidence, raw_text)
                 if reference_result is not None:
                     diagnostics[-1]["wheel_model_recognitions"] = original_result
                     diagnostics[-1]["wheel_model_policy"] = diagnostics[-1].get("wheel_policy")

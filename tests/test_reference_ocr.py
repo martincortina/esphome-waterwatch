@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from server.models import DialConfig, MeterConfig, ROI, VisualReference
 from server.ocr import Pipeline
-from server.reference_ocr import ReferenceSample, recognize_glyph, recognize_pointer, recognize_sector
+from server.reference_ocr import ReferenceSample, recognize_calibrated_glyph, recognize_glyph, recognize_pointer, recognize_sector
 
 
 def glyph(value):
@@ -61,6 +61,28 @@ def test_contrast_fallback_requires_independent_numeric_support_and_preserves_it
     # A confident original shape match is preserved, including its actual scores.
     original = recognize_glyph(glyph(0), [sample], .8)
     assert recognize_glyph(glyph(0), [sample], .8, [('0', .83)]) == original
+
+
+def test_calibrated_continuous_match_requires_both_reference_and_numeric_evidence():
+    known = glyph(1)
+    sample = ReferenceSample(known, 1, identifier='a'*32)
+    image = np.clip(known.astype(float)*.97+2,0,255).astype(np.uint8)
+    found = recognize_calibrated_glyph(image,[sample],.8,[('1',.87)])
+    assert found['results'][0] == ('1',.87)
+    assert found['reference_method'] == 'calibrated_contrast_gradient_consensus'
+    assert found['reference_scores'][0] >= .97 and found['reference_scores'][1] >= .93
+    for votes in [[],[('1',.79)],[('7',.99)]]:
+        assert recognize_calibrated_glyph(image,[sample],.8,votes) is None
+    assert recognize_calibrated_glyph(image,[sample,ReferenceSample(known,7)],.8,[('1',.99)]) is None
+    assert recognize_calibrated_glyph(np.zeros_like(known),[sample],.8,[('1',.99)]) is None
+
+
+@pytest.mark.parametrize('label',range(10))
+def test_calibrated_continuous_match_rejects_other_digits_despite_incorrect_model_vote(label):
+    sample=ReferenceSample(glyph(label),label)
+    for other in range(10):
+        if other!=label:
+            assert recognize_calibrated_glyph(glyph(other),[sample],.8,[(str(label),.99)]) is None
 
 
 @pytest.mark.parametrize('label', range(10))

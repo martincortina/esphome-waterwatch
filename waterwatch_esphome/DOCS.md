@@ -476,3 +476,16 @@ in private app storage and backups. Recheck references after moving the camera
 or changing region geometry. Reserve fresh photos and different wheel/dial
 positions for accuracy checks; reusing the calibration photo measures only a
 calibration round trip.
+
+
+### Reflective wheel references under flash (0.13.1)
+
+In Learned mode, thin reflective strokes may change their binary edge map with
+small JPEG or flash variations. When the strict foreground/edge comparison does
+not qualify, a second private-reference route requires a qualifying numeric
+model vote, contrast correlation of at least 0.97 and signed-gradient correlation
+of at least 0.93. Higher configured thresholds still apply. Comparisons ignore
+translated padding, and a differently labelled reference must remain at least
+0.10 below the chosen match. Diagnostics report the original model score and
+measured image correlations. Unmatched positions remain uncertain; this does not
+change ordinary text recognition or infer a value from previous readings.
