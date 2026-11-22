@@ -10,6 +10,7 @@ from server.ocr import Pipeline
 from server.reference_ocr import (
     ReferenceSample,
     recognize_calibrated_glyph,
+    recognize_dial_edge_match,
     recognize_glare_resistant_dial,
     recognize_glare_resistant_wheel,
     recognize_glyph,
@@ -200,6 +201,17 @@ def test_glare_resistant_dial_requires_separate_images_and_rejects_conflicting_l
     result = recognize_glare_resistant_dial(image, cfg, [first, second], .8)
     assert [value for value, _ in result["results"]] == ["6", "6"]
     assert recognize_glare_resistant_dial(image, cfg, [first, second, conflict], .8) is None
+
+
+def test_edge_match_rejects_two_labels_for_an_indistinguishable_pointer_pose():
+    image = pointer(5.05 * 36)
+    correct = ReferenceSample(image, 5, identifier="after-tick", kind="sector")
+    earlier = ReferenceSample(pointer(4.8 * 36), 4, identifier="before-tick", kind="sector")
+    result = recognize_dial_edge_match(image, DialConfig(), [correct, earlier], .8)
+    assert [digit for digit, _ in result["results"]] == ["5", "5"]
+    assert recognize_dial_edge_match(image, DialConfig(), [correct], .8) is None
+    identical = ReferenceSample(image.copy(), 4, identifier="conflict", kind="sector")
+    assert recognize_dial_edge_match(image, DialConfig(), [correct, identical], .8) is None
 
 
 def test_pointer_prefers_precise_calibration_over_higher_scoring_coarse_label(monkeypatch):

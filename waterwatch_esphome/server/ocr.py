@@ -15,6 +15,7 @@ from server.models import ROI, MeterConfig
 from server.neural_ocr import ASSIST_VIEWS, NeuralOCREngine, NeuralOCRError
 from server.reference_ocr import (
     recognize_calibrated_glyph,
+    recognize_dial_edge_match,
     recognize_glare_resistant_dial,
     recognize_glare_resistant_wheel,
     recognize_glyph,
@@ -406,6 +407,8 @@ class Pipeline:
                 if sector is None and not (results[0][0] is not None and results[0][0] == results[1][0]
                                            and min(score for _, score in results) >= cfg.min_confidence):
                     sector = recognize_glare_resistant_dial(color, roi.dial, samples, cfg.min_confidence)
+                    if sector is None:
+                        sector = recognize_dial_edge_match(color, roi.dial, samples, cfg.min_confidence)
                 if sector is not None:
                     diagnostics[-1]["unverified_analog_views"] = diagnostics[-1].pop("analog_views", [])
                     diagnostics[-1].pop("pointer_position_verified", None)

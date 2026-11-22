@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.3
+
+- Compare dial edges when adjacent verified pointer positions are close.
+- Support up to 80 private recognition references per region.
+
 ## 0.14.2
 
 - Cross-check rolling-wheel phase against image features away from flash glare.

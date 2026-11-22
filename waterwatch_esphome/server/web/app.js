@@ -1,7 +1,7 @@
 /* Credentials stay in memory. Only the appearance preference is stored locally. */
 "use strict";
 const $ = id => document.getElementById(id);
-const maxVisualReferences = 64;
+const maxVisualReferences = 80;
 let token = "", meters = [], current = null, savedConfig = null, picture = null;
 let cameras = [], flashLights = [], historyRows = [], ingress = false, busy = false, dirty = false, jsonDraft = false;
 let showingOriginal = false, startPoint = null, draftPoint = null, layoutMeterId = null, messageTimer;

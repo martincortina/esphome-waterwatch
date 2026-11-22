@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,47}$")]
-MAX_VISUAL_REFERENCES = 64
+MAX_VISUAL_REFERENCES = 80
 
 
 def utcnow() -> datetime:

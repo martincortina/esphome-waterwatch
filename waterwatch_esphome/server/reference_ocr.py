@@ -411,3 +411,38 @@ def recognize_glare_resistant_dial(patch, cfg, samples, threshold):
             "sector_reference_ids": [row[3].identifier for row in support],
             "recognition_sources": ["Verified sector · pointer colour", "Verified sector · light and shadow"],
             "sector_reference_scores": views}
+
+
+def dial_edge_profile(patch, cfg):
+    profiles = dial_pose_profile(patch, cfg)
+    edges = [unit_profile(np.roll(profile, -3) - np.roll(profile, 3)) for profile in profiles]
+    return np.concatenate((profiles, np.stack(edges)))
+
+
+def recognize_dial_edge_match(patch, cfg, samples, threshold):
+    """Distinguish nearby tick poses only when one labeled match is clearly closer."""
+    if cfg.pointer_color != "red":
+        return None
+    current = dial_edge_profile(patch, cfg)
+    matches = []
+    for sample in samples:
+        if sample.kind != "sector":
+            continue
+        profile = dial_edge_profile(sample.image, cfg)
+        similarities = np.clip(np.sum(current * profile, axis=1), -1, 1)
+        color = float(min(similarities[0], similarities[2]))
+        light = float(min(similarities[1], similarities[3]))
+        edge = float(min(similarities[4:]))
+        error = .8 * (.55 * (1 - color) + .45 * (1 - light)) + .2 * (1 - edge)
+        reliable = color >= max(.94, threshold) and light >= max(.97, threshold) and edge >= .76
+        matches.append((error, str(int(sample.value)), sample, color, light, edge, reliable))
+    best = min((item for item in matches if item[-1]), key=lambda item: item[0], default=None)
+    if best is None:
+        return None
+    error, label, sample, color, light, edge, _ = best
+    competing = min((item[0] for item in matches if item[1] != label), default=None)
+    if competing is None or error + .001 >= .55 * max(competing, .001):
+        return None
+    return {"results": [(label, color), (label, light)], "analog_policy": "verified_sector_edge_match",
+            "sector_reference_id": sample.identifier, "sector_reference_scores": [color, light, edge],
+            "recognition_sources": ["Verified sector · pointer colour", "Verified sector · edge contrast"]}
