@@ -13,7 +13,14 @@ from server.alignment import AlignmentError, register
 from server.analog_ocr import recognize_dial
 from server.models import ROI, MeterConfig
 from server.neural_ocr import ASSIST_VIEWS, NeuralOCREngine, NeuralOCRError
-from server.reference_ocr import recognize_calibrated_glyph, recognize_glyph, recognize_pointer, recognize_sector
+from server.reference_ocr import (
+    recognize_calibrated_glyph,
+    recognize_glare_resistant_dial,
+    recognize_glare_resistant_wheel,
+    recognize_glyph,
+    recognize_pointer,
+    recognize_sector,
+)
 from server.wheel_ocr import WheelOCREngine, resolve_wheel
 
 
@@ -332,14 +339,7 @@ class Pipeline:
                 reference_result = recognize_glyph(color, samples, cfg.min_confidence) if samples else None
                 if reference_result is None and samples:
                     reference_result = recognize_calibrated_glyph(color, samples, cfg.min_confidence, raw_text)
-                if reference_result is not None:
-                    diagnostics[-1]["wheel_model_recognitions"] = original_result
-                    diagnostics[-1]["wheel_model_policy"] = diagnostics[-1].get("wheel_policy")
-                    diagnostics[-1].pop("possible_transition", None)
-                    results = reference_result.pop("results")
-                    diagnostics[-1].update(reference_result, recognitions=results,
-                                           wheel_policy="calibrated_reference_verified")
-                else:
+                if reference_result is None:
                     candidate = results[0][0]
                     groups = [diagnostics[-1].get("primary_recognitions", []),
                               diagnostics[-1].get("assist_recognitions", [])]
@@ -348,9 +348,20 @@ class Pipeline:
                                     and all(any(value == candidate and score >= cfg.min_confidence
                                                 for value, score in group) for group in groups))
                     if not corroborated:
-                        diagnostics[-1]["wheel_model_recognitions"] = original_result
-                        results = [(None, 0.)]*2
-                        diagnostics[-1].update(wheel_policy="calibration_required", recognitions=results)
+                        reference_result = recognize_glare_resistant_wheel(
+                            color, samples, cfg.min_confidence, diagnostics[-1].get("wheel_views", ()),
+                        )
+                        if reference_result is None:
+                            diagnostics[-1]["wheel_model_recognitions"] = original_result
+                            results = [(None, 0.)]*2
+                            diagnostics[-1].update(wheel_policy="calibration_required", recognitions=results)
+                if reference_result is not None:
+                    diagnostics[-1]["wheel_model_recognitions"] = original_result
+                    diagnostics[-1]["wheel_model_policy"] = diagnostics[-1].get("wheel_policy")
+                    diagnostics[-1].pop("possible_transition", None)
+                    results = reference_result.pop("results")
+                    diagnostics[-1].update(reference_result, recognitions=results,
+                                           wheel_policy="calibrated_reference_verified")
             if samples and roi.kind == "digit" and not (
                 results[0][0] is not None and results[0][0] == results[1][0]
                 and min(score for _, score in results) >= cfg.min_confidence
@@ -392,6 +403,9 @@ class Pipeline:
                                for value, view in zip(values, views, strict=True)]
                     diagnostics[-1].update(recognitions=results, analog_digit_boundary=near_tick)
                 sector = recognize_sector(color, roi.dial, samples, cfg.min_confidence)
+                if sector is None and not (results[0][0] is not None and results[0][0] == results[1][0]
+                                           and min(score for _, score in results) >= cfg.min_confidence):
+                    sector = recognize_glare_resistant_dial(color, roi.dial, samples, cfg.min_confidence)
                 if sector is not None:
                     diagnostics[-1]["unverified_analog_views"] = diagnostics[-1].pop("analog_views", [])
                     diagnostics[-1].pop("pointer_position_verified", None)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.2
+
+- Cross-check rolling-wheel phase against image features away from flash glare.
+- Compare uncertain dial readings against separate labeled pointer photos.
+- Support up to 64 private recognition references per region.
+
 ## 0.14.1
 
 - Store all originals for a capture day directly in one YYYY-MM-DD folder.

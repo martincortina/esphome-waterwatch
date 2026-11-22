@@ -7,7 +7,15 @@ from pydantic import ValidationError
 
 from server.models import DialConfig, MeterConfig, ROI, VisualReference
 from server.ocr import Pipeline
-from server.reference_ocr import ReferenceSample, recognize_calibrated_glyph, recognize_glyph, recognize_pointer, recognize_sector
+from server.reference_ocr import (
+    ReferenceSample,
+    recognize_calibrated_glyph,
+    recognize_glare_resistant_dial,
+    recognize_glare_resistant_wheel,
+    recognize_glyph,
+    recognize_pointer,
+    recognize_sector,
+)
 
 
 def glyph(value):
@@ -165,6 +173,33 @@ def test_sector_reference_classifies_only_matching_absolute_pointer_poses():
     for digit in [0,1,2,3,4,5,7,8,9]:
         assert recognize_sector(pointer((digit+.4)*36),DialConfig(),[sample],.8) is None
     assert recognize_sector(image,DialConfig(),[sample,ReferenceSample(image,5,kind='sector')],.8) is None
+
+
+def test_glare_resistant_wheel_checks_the_visible_glyph_and_both_phases():
+    image = glyph(2)
+    reflected = image.copy()
+    reflected[-16:, -10:] = 255
+    samples = [ReferenceSample(image, 2, identifier="2")]
+    views = [{"phase": 2.4, "score": .93}, {"phase": 2.5, "score": .88}]
+    result = recognize_glare_resistant_wheel(reflected, samples, .8, views)
+    assert [value for value, _ in result["results"]] == ["2", "2"]
+    assert recognize_glare_resistant_wheel(reflected, samples, .8, views[:1]) is None
+    assert recognize_glare_resistant_wheel(reflected, samples, .8, [views[0], {"phase": 3.1, "score": .92}]) is None
+    assert recognize_glare_resistant_wheel(reflected, samples + [ReferenceSample(image, 3)], .8, views) is None
+
+
+def test_glare_resistant_dial_requires_separate_images_and_rejects_conflicting_labels():
+    image = pointer(6.4 * 36)
+    lighter = np.minimum(image.astype(np.int16) + 5, 255).astype(np.uint8)
+    cfg = DialConfig()
+    first = ReferenceSample(image, 6, identifier="first", kind="sector")
+    second = ReferenceSample(lighter, 6, identifier="second", kind="sector")
+    duplicate = ReferenceSample(image.copy(), 6, identifier="duplicate", kind="sector")
+    conflict = ReferenceSample(lighter, 5, identifier="conflict", kind="sector")
+    assert recognize_glare_resistant_dial(image, cfg, [first, duplicate], .8) is None
+    result = recognize_glare_resistant_dial(image, cfg, [first, second], .8)
+    assert [value for value, _ in result["results"]] == ["6", "6"]
+    assert recognize_glare_resistant_dial(image, cfg, [first, second, conflict], .8) is None
 
 
 def test_pointer_prefers_precise_calibration_over_higher_scoring_coarse_label(monkeypatch):

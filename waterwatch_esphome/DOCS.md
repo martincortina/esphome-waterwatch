@@ -385,7 +385,7 @@ administrator can attach private, physically verified reference crops to a regio
 `POST /api/meters/{id}/recognition-reference?region=0&value=1` accepts a source
 JPEG/PNG and returns a reference descriptor. Append that descriptor to the region's
 `visual_references` in its saved configuration. Region indices start at zero;
-each region supports at most 32 references. Digital labels must be integers
+each region supports at most 64 references. Digital labels must be integers
 with no uncertainty. A pointer label is a position on its 0–9 scale and can include
 an explicit `uncertainty` up to 0.49. Use several distinct calibration photos;
 reserve fresh photos for validation. Never label an unknown digit by its OCR result.
@@ -471,7 +471,7 @@ rotations do not inherit the label. The API uses `kind=sector`; its existing
 `kind=position` references retain their prior position/uncertainty semantics.
 
 Teaching a reference does not record consumption, change a baseline or publish
-MQTT. Up to 32 references per region are supported. Photos and calibration stay
+MQTT. Up to 64 references per region are supported. Photos and calibration stay
 in private app storage and backups. Recheck references after moving the camera
 or changing region geometry. Reserve fresh photos and different wheel/dial
 positions for accuracy checks; reusing the calibration photo measures only a

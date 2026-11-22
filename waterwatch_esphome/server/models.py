@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,47}$")]
+MAX_VISUAL_REFERENCES = 64
 
 
 def utcnow() -> datetime:
@@ -72,7 +73,7 @@ class ROI(StrictModel):
     dial: DialConfig | None = None
     include_in_reading: bool = True
     recognition_mode: Literal["auto", "text", "rolling", "calibrated"] = "auto"
-    visual_references: list[VisualReference] = Field(default_factory=list, max_length=32)
+    visual_references: list[VisualReference] = Field(default_factory=list, max_length=MAX_VISUAL_REFERENCES)
 
     @model_validator(mode="after")
     def bounds(self):

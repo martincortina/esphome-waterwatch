@@ -1,6 +1,7 @@
 /* Credentials stay in memory. Only the appearance preference is stored locally. */
 "use strict";
 const $ = id => document.getElementById(id);
+const maxVisualReferences = 64;
 let token = "", meters = [], current = null, savedConfig = null, picture = null;
 let cameras = [], flashLights = [], historyRows = [], ingress = false, busy = false, dirty = false, jsonDraft = false;
 let showingOriginal = false, startPoint = null, draftPoint = null, layoutMeterId = null, messageTimer;
@@ -414,9 +415,9 @@ function updateDigitControls() {
 function updateRecognitionControls(){
   const roi=current?.config.rois[selectedDigit],ready=digitEditorReady(),analog=roi?.kind==="analog",digital=Boolean(roi&&!analog);
   $("regionRecognition").disabled=!ready||!digital;
-  $("teachWheel").disabled=!ready||!digital||!sourceBlob||showingOriginal||(roi?.visual_references?.length||0)>=32;
+  $("teachWheel").disabled=!ready||!digital||!sourceBlob||showingOriginal||(roi?.visual_references?.length||0)>=maxVisualReferences;
   $("clearWheelReferences").disabled=!ready||!digital||!roi?.visual_references?.length;
-  $("teachDial").disabled=!ready||!analog||!sourceBlob||showingOriginal||(roi?.visual_references?.length||0)>=32;
+  $("teachDial").disabled=!ready||!analog||!sourceBlob||showingOriginal||(roi?.visual_references?.length||0)>=maxVisualReferences;
   $("dialIncluded").disabled=!ready||!analog;
   if(ready&&analog&&roi.include_in_reading===false){try{$("dialIncluded").disabled=!DialTools.scalePlan(editedConfig(),selectedDigit).can_include;}catch{$("dialIncluded").disabled=true;}}
 }
@@ -505,7 +506,7 @@ function renderAnalogEditor() {
   if(!analog)return;
   const dial=roi.dial||DialTools.defaults();
   $("dialReferenceCount").textContent=`${roi.visual_references?.filter(r=>r.kind==="sector").length||0} verified digit photos · private`;
-  $("teachDial").disabled=busy||!sourceBlob||showingOriginal||!digitEditorReady()||(roi.visual_references?.length||0)>=32;
+  $("teachDial").disabled=busy||!sourceBlob||showingOriginal||!digitEditorReady()||(roi.visual_references?.length||0)>=maxVisualReferences;
   for(const [id,value] of Object.entries({dialColor:dial.pointer_color,dialDirection:dial.clockwise?"cw":"ccw",dialZero:dial.zero_angle_degrees,dialRadius:dial.radius*100,dialCenterX:dial.center_x*100,dialCenterY:dial.center_y*100}))if(document.activeElement!==$(id))$(id).value=Number.isFinite(value)?Number(value.toFixed(3)):value;
   $("dialIncluded").checked=roi.include_in_reading!==false;
   $("analogPlacement").textContent=roi.include_in_reading===false?"Preview only · total unchanged":"Included at configured precision";
@@ -524,8 +525,8 @@ function renderWheelEditor(){
   if(!digit)return;
   $("regionRecognition").value=roi.recognition_mode||"auto";
   $("regionRecognition").disabled=busy||!digitEditorReady();
-  $("wheelReferenceCount").textContent=`${roi.visual_references?.length||0}/32 verified photos · private`;
-  $("teachWheel").disabled=busy||!sourceBlob||showingOriginal||!digitEditorReady()||(roi.visual_references?.length||0)>=32;
+  $("wheelReferenceCount").textContent=`${roi.visual_references?.length||0}/${maxVisualReferences} verified photos · private`;
+  $("teachWheel").disabled=busy||!sourceBlob||showingOriginal||!digitEditorReady()||(roi.visual_references?.length||0)>=maxVisualReferences;
   $("clearWheelReferences").disabled=busy||!digitEditorReady()||!roi.visual_references?.length;
 }
 $("regionRecognition").onchange=()=>{if(!digitEditorReady())return;const roi=current.config.rois[selectedDigit];if(!roi||roi.kind==="analog")return;const before=digitSnapshot();roi.recognition_mode=$("regionRecognition").value;commitDigitEdit(before);};
@@ -533,7 +534,7 @@ $("teachWheel").onclick=act(async()=>{
   const index=selectedDigit,image=sourceBlob,value=Number($("verifiedWheelDigit").value);
   if(!image||!current?.config.rois[index]||current.config.rois[index].kind==="analog")throw new Error("Select a number wheel and take a photo first.");
   if(!/^\d$/.test($("verifiedWheelDigit").value)||value<0||value>9)throw new Error("Enter the physically verified completed digit, from 0 to 9.");
-  if((current.config.rois[index].visual_references?.length||0)>=32)throw new Error("This wheel already has 32 reference photos.");
+  if((current.config.rois[index].visual_references?.length||0)>=maxVisualReferences)throw new Error(`This wheel already has ${maxVisualReferences} reference photos.`);
   if(dirty)await saveConfiguration(false);
   const saved=await(await api(`/api/meters/${selected()}/recognition-reference?region=${index}&value=${value}`,{method:"POST",body:image,headers:{"Content-Type":image.type}})).json();
   const roi=current.config.rois[index];roi.visual_references??=[];roi.visual_references.push(saved.reference);roi.recognition_mode="calibrated";
@@ -545,7 +546,7 @@ $("teachDial").onclick=act(async()=>{
   const index=selectedDigit,image=sourceBlob,value=Number($("verifiedDialDigit").value);
   if(!image||current?.config.rois[index]?.kind!=="analog")throw new Error("Select a dial and take a photo first.");
   if(!/^\d$/.test($("verifiedDialDigit").value))throw new Error("Enter the physically verified completed dial digit, from 0 to 9.");
-  if((current.config.rois[index].visual_references?.length||0)>=32)throw new Error("This dial already has 32 reference photos.");
+  if((current.config.rois[index].visual_references?.length||0)>=maxVisualReferences)throw new Error(`This dial already has ${maxVisualReferences} reference photos.`);
   if(dirty)await saveConfiguration(false);
   const saved=await(await api(`/api/meters/${selected()}/recognition-reference?region=${index}&value=${value}&kind=sector`,{method:"POST",body:image,headers:{"Content-Type":image.type}})).json();
   current.config.rois[index].visual_references??=[];current.config.rois[index].visual_references.push(saved.reference);

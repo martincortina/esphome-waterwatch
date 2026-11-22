@@ -168,6 +168,73 @@ def recognize_calibrated_glyph(patch, samples, threshold, corroborating):
     return result
 
 
+def unit_profile(values):
+    values = np.asarray(values, dtype=np.float32).ravel()
+    centered = values - values.mean()
+    return centered / max(np.linalg.norm(centered), 1e-9)
+
+
+def wheel_glare_profile(patch):
+    gray = cv2.resize(patch.min(axis=2), (48, 80), interpolation=cv2.INTER_AREA)
+    gray = cv2.GaussianBlur(gray, (3, 3), .7)
+    # The lower corner of a rolling wheel often reflects the flash off the glass.
+    glyph = gray[4:65, 4:41]
+    gradients = np.dstack([cv2.Sobel(glyph, cv2.CV_32F, x, y) for x, y in ((1, 0), (0, 1))])
+    return unit_profile(glyph), unit_profile(gradients)
+
+
+def recognizable_pose(candidates, minimum, support_count, threshold):
+    ranked = sorted(candidates, key=lambda item: item[0], reverse=True)
+    if not ranked:
+        return []
+    label = ranked[0][1]
+    support = []
+    signatures = set()
+    for score, digit, views, sample in ranked:
+        if digit != label or score < minimum or min(views) < threshold:
+            continue
+        signature = sample.image.tobytes()
+        if signature not in signatures:
+            signatures.add(signature)
+            support.append((score, digit, views, sample))
+        if len(support) == support_count:
+            break
+    other = max((score for score, digit, _, _ in ranked if digit != label), default=-1.)
+    if len(support) < support_count or support[-1][0] - other < .08:
+        return []
+    return support
+
+
+def pose_score(scores, floors):
+    return min((score - floor) / (1 - floor) for score, floor in zip(scores, floors, strict=True))
+
+
+def recognize_glare_resistant_wheel(patch, samples, threshold, phase_views):
+    """Cross-check a reference outside the glare against both wheel model views."""
+    if len(phase_views) != 2:
+        return None
+    current = wheel_glare_profile(patch)
+    candidates = []
+    floors = (.90, .78)
+    for sample in samples:
+        if sample.kind != "position" or sample.uncertainty or not float(sample.value).is_integer():
+            continue
+        target = wheel_glare_profile(sample.image)
+        views = [float(first @ second) for first, second in zip(current, target, strict=True)]
+        candidates.append((pose_score(views, floors), str(int(sample.value)), views, sample))
+    support = recognizable_pose(candidates, .2, 1, threshold)
+    if not support:
+        return None
+    _, label, views, sample = support[0]
+    model_score = min(view["score"] for view in phase_views)
+    if model_score < threshold or any(str(int(view["phase"])) != label for view in phase_views):
+        return None
+    return {"results": [(label, model_score), (label, min(views))], "reference_id": sample.identifier,
+            "reference_policy": "verified_glyph_shape", "reference_method": "glare_resistant_wheel_consensus",
+            "reference_scores": views, "reference_model_score": model_score,
+            "recognition_sources": ["Wheel · phase agreement", "Verified reference · glare-free glyph"]}
+
+
 def pointer_polar(patch, cfg, inner, outer):
     # Continuous opponent colour survives flash white-balance changes that move
     # the same red pigment across a hard HSV threshold. Angular NCC below removes
@@ -304,3 +371,43 @@ def recognize_sector(patch, cfg, samples, threshold):
             "analog_policy": "verified_sector_reference", "sector_reference_id": identifier,
             "recognition_sources": ["Verified sector · inner band", "Verified sector · outer band"],
             "sector_reference_scores": list(views)}
+
+
+def dial_pose_profile(patch, cfg):
+    intensity = cv2.cvtColor(patch, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+    height, width = intensity.shape
+    angles = np.arange(720) * np.pi / 360
+    profiles = []
+    for lower, upper in ((.32, .69), (.52, .86)):
+        radii = np.linspace(lower, upper, 32)
+        x = cfg.center_x * width + np.sin(angles)[:, None] * radii * cfg.radius * width
+        y = cfg.center_y * height - np.cos(angles)[:, None] * radii * cfg.radius * height
+        color = pointer_polar(patch, cfg, lower, upper).mean(axis=1)
+        light = cv2.remap(intensity, x.astype(np.float32), y.astype(np.float32), cv2.INTER_LINEAR).mean(axis=1)
+        for channel in (color, light):
+            profiles.append(unit_profile(sum(np.roll(channel, offset) for offset in range(-4, 5)) / 9))
+    return np.array(profiles)
+
+
+def recognize_glare_resistant_dial(patch, cfg, samples, threshold):
+    """Require two distinct labeled images with matching color and intensity."""
+    if cfg.pointer_color != "red":
+        return None
+    current = dial_pose_profile(patch, cfg)
+    candidates = []
+    floors = (.88, .95)
+    for sample in samples:
+        if sample.kind != "sector":
+            continue
+        views = np.sum(current * dial_pose_profile(sample.image, cfg), axis=1)
+        scores = [float(min(views[::2])), float(min(views[1::2]))]
+        candidates.append((pose_score(scores, floors), str(int(sample.value)), scores, sample))
+    support = recognizable_pose(candidates, .5, 2, threshold)
+    if not support:
+        return None
+    _, label, views, sample = support[0]
+    return {"results": [(label, min(first, second)) for first, second in zip(views, support[1][2], strict=True)],
+            "analog_policy": "verified_sector_consensus", "sector_reference_id": sample.identifier,
+            "sector_reference_ids": [row[3].identifier for row in support],
+            "recognition_sources": ["Verified sector · pointer colour", "Verified sector · light and shadow"],
+            "sector_reference_scores": views}
