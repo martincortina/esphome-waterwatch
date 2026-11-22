@@ -1,4 +1,5 @@
-from datetime import timedelta
+import json
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -97,4 +98,36 @@ def test_archive_purges_oldest_for_quota_then_expires_while_disabled(tmp_path, m
     now += timedelta(days=30, seconds=1)
     reopened = PhotoArchive(tmp_path / "waterwatch", tmp_path)
     assert reopened.page("house", None, 12)["photos"] == []
-    assert not list((tmp_path / "waterwatch").rglob("original.*"))
+    assert not list((tmp_path / "waterwatch").rglob("*.png"))
+
+
+def test_reorganizes_legacy_photos_by_capture_day_without_changing_ids_or_originals(tmp_path, monkeypatch, image):
+    root = tmp_path / "waterwatch"
+    captured_at = datetime(2026, 11, 22, 23, 59, 58, 123456, tzinfo=UTC)
+    stored_at = captured_at + timedelta(seconds=3)
+    monkeypatch.setattr(photo_archive, "utcnow", lambda: stored_at)
+    photo_id = stored_at.strftime("%Y%m%dT%H%M%S%fZ") + "-" + "a" * 32
+    legacy = root / "2026" / "11" / "23" / photo_id
+    legacy.mkdir(parents=True)
+    (legacy / "original.png").write_bytes(image)
+    (legacy / "photo.json").write_text(json.dumps({
+        "id": photo_id, "meter_id": "house", "captured_at": captured_at.isoformat(),
+        "format": "png", "source": "test", "reason": "ambiguous_digit",
+    }), encoding="utf-8")
+    unrelated = legacy / "keep.txt"
+    unrelated.write_text("unrelated", encoding="utf-8")
+
+    archive = PhotoArchive(root, tmp_path)
+    archive.set_enabled(True)
+    archive.save("house", captured_at, image, source="preview")
+    photos = archive.page("house", None, 12)["photos"]
+    daily = root / "2026-11-22"
+    assert len(photos) == 2
+    assert len(list(daily.iterdir())) == 4
+    for photo in photos:
+        assert photo["file_name"].startswith("2026-11-22_23-59-58_123456Z-")
+        assert (daily / photo["file_name"]).read_bytes() == image
+    assert list(legacy.iterdir()) == [unrelated]
+    restarted = PhotoArchive(root, tmp_path)
+    assert restarted.original("house", photo_id) == (image, "png")
+    assert restarted.page("house", None, 12)["photos"] == photos

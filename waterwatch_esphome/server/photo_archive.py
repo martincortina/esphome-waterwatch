@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,8 +25,92 @@ class PhotoArchive:
         self.used_bytes = 0
         self.error = False
 
-    def _folder(self, photo_id):
+    def _legacy_folder(self, photo_id):
         return self.root / photo_id[:4] / photo_id[4:6] / photo_id[6:8] / photo_id
+
+    def _paths(self, entry):
+        captured = datetime.fromisoformat(entry["captured_at"])
+        date = captured.date().isoformat()
+        clock = captured.strftime("%H-%M-%S_%f")
+        suffix = entry["id"].rsplit("-", 1)[1]
+        stem = f"{date}_{clock}Z-{suffix}"
+        folder = self.root / date
+        return folder / f"{stem}.{entry['format']}", folder / f".{stem}.json"
+
+    @staticmethod
+    def _read_entry(metadata):
+        try:
+            entry = json.loads(metadata.read_text(encoding="utf-8"))
+            if not re.fullmatch(PHOTO_ID, entry["id"]) or entry["format"] not in {"jpg", "png"}:
+                return None
+            entry["captured_at"] = timestamp(datetime.fromisoformat(entry["captured_at"]))
+            if not isinstance(entry["meter_id"], str):
+                return None
+            return entry
+        except (FileNotFoundError, ValueError, TypeError, KeyError):
+            return None
+
+    def _index(self, entries, entry, original, metadata):
+        size = original.stat().st_size
+        entries[entry["id"]] = {
+            **entry,
+            "file_name": original.name,
+            "bytes": size,
+            "storage_bytes": size + metadata.stat().st_size,
+            "original_path": original,
+            "metadata_path": metadata,
+        }
+
+    @staticmethod
+    def _write_atomic(path, data):
+        staging = path.with_name(f".waterwatch-{uuid4().hex}.tmp")
+        output = staging.open("xb")
+        try:
+            with output:
+                output.write(data)
+            staging.replace(path)
+        finally:
+            staging.unlink(missing_ok=True)
+
+    def _migrate_legacy(self, entries):
+        for metadata in self.root.glob("*/*/*/*/photo.json"):
+            if metadata.resolve() != metadata:
+                continue
+            entry = self._read_entry(metadata)
+            if entry is None or metadata.parent != self._legacy_folder(entry["id"]):
+                continue
+            original = metadata.parent / ("original." + entry["format"])
+            if original.resolve() != original:
+                continue
+            target, sidecar = self._paths(entry)
+            try:
+                if target.parent.resolve() != target.parent or sidecar.resolve() != sidecar:
+                    raise OSError("Unexpected photo directory")
+                if original.is_file():
+                    # Keep the original and its metadata readable until the new
+                    # metadata is in place. The original itself moves atomically.
+                    if target.exists() or target.is_symlink():
+                        raise OSError("Photo location already occupied")
+                    target.parent.mkdir(exist_ok=True)
+                    self._write_atomic(sidecar, metadata.read_bytes())
+                    original.rename(target)
+                    self._index(entries, entry, target, sidecar)
+                elif entry["id"] not in entries:
+                    continue
+                metadata.unlink()
+                self._remove_empty_folders(metadata.parent)
+            except OSError:
+                if original.is_file() and entry["id"] not in entries:
+                    self._index(entries, entry, original, metadata)
+                log.warning("Could not move a WaterWatch photo into its daily folder")
+
+    def _remove_empty_folders(self, folder):
+        while folder != self.root:
+            try:
+                folder.rmdir()
+            except OSError:
+                break
+            folder = folder.parent
 
     def _load(self):
         if self.entries is not None:
@@ -39,34 +123,30 @@ class PhotoArchive:
         for staging in self.root.glob("*/*/*/.*"):
             photo_id = staging.name[1:]
             if (re.fullmatch(PHOTO_ID, photo_id) and staging.is_dir()
-                    and staging.parent == self._folder(photo_id).parent
+                    and staging.parent == self._legacy_folder(photo_id).parent
                     and staging.resolve() == staging):
                 for name in ("original.jpg", "original.png", "photo.json"):
                     (staging / name).unlink(missing_ok=True)
                 if not any(staging.iterdir()):
                     staging.rmdir()
         entries = {}
-        for metadata in self.root.glob("*/*/*/*/photo.json"):
-            photo_id = metadata.parent.name
-            if not re.fullmatch(PHOTO_ID, photo_id) or self._folder(photo_id) != metadata.parent:
-                continue
+        for metadata in self.root.glob("????-??-??/.*Z-*.json"):
             if metadata.resolve() != metadata:
                 continue
-            try:
-                entry = json.loads(metadata.read_text(encoding="utf-8"))
-                if entry["id"] != photo_id or entry["format"] not in {"jpg", "png"}:
-                    continue
-                original = metadata.parent / ("original." + entry["format"])
-                if original.resolve() != original:
-                    continue
-                if not original.is_file():
-                    metadata.unlink(missing_ok=True)
-                    continue
-                entry["bytes"] = original.stat().st_size
-                entry["storage_bytes"] = entry["bytes"] + metadata.stat().st_size
-                entries[photo_id] = entry
-            except (FileNotFoundError, ValueError, TypeError, KeyError):
+            entry = self._read_entry(metadata)
+            if entry is None:
                 continue
+            original, expected = self._paths(entry)
+            if metadata != expected or original.resolve() != original:
+                continue
+            if original.is_file():
+                self._index(entries, entry, original, metadata)
+            else:
+                metadata.unlink(missing_ok=True)
+        for staging in self.root.glob("????-??-??/.waterwatch-*.tmp"):
+            if re.fullmatch(r"\.waterwatch-[a-f0-9]{32}\.tmp", staging.name) and staging.resolve() == staging:
+                staging.unlink(missing_ok=True)
+        self._migrate_legacy(entries)
         self.entries = dict(sorted(entries.items()))
         self.used_bytes = sum(entry["storage_bytes"] for entry in self.entries.values())
 
@@ -77,19 +157,14 @@ class PhotoArchive:
             if photo_id >= cutoff and self.used_bytes + incoming <= MAX_BYTES:
                 break
             entry = self.entries[photo_id]
-            folder = self._folder(photo_id)
-            if folder.resolve() != folder:
+            original, metadata = entry["original_path"], entry["metadata_path"]
+            if original.parent.resolve() != original.parent:
                 raise OSError("Unexpected photo directory")
-            (folder / ("original." + entry["format"])).unlink(missing_ok=True)
-            (folder / "photo.json").unlink(missing_ok=True)
+            original.unlink(missing_ok=True)
+            metadata.unlink(missing_ok=True)
             del self.entries[photo_id]
             self.used_bytes -= entry["storage_bytes"]
-            # Empty date folders can go too. Keep any additional media files.
-            for directory in (folder, *list(folder.parents)[:3]):
-                try:
-                    directory.rmdir()
-                except OSError:
-                    break
+            self._remove_empty_folders(original.parent)
 
     def maintain(self):
         if self.root is not None:
@@ -146,35 +221,32 @@ class PhotoArchive:
         if size > MAX_BYTES:
             raise OSError("Photo exceeds archive quota")
         self._prune(size)
-        folder = self._folder(photo_id)
-        if folder.parent.resolve() != folder.parent:
+        original, sidecar = self._paths(entry)
+        if original.parent.resolve() != original.parent:
             raise OSError("Unexpected photo directory")
-        folder.parent.mkdir(parents=True, exist_ok=True)
-        staging = folder.with_name("." + photo_id)
-        staging.mkdir()
-        original = staging / ("original." + extension)
-        sidecar = staging / "photo.json"
+        original.parent.mkdir(exist_ok=True)
+        self._write_atomic(sidecar, metadata)
         try:
-            original.write_bytes(data)
-            sidecar.write_bytes(metadata)
-            staging.rename(folder)
+            self._write_atomic(original, data)
         except OSError:
-            original.unlink(missing_ok=True)
             sidecar.unlink(missing_ok=True)
-            staging.rmdir()
             raise
-        self.entries[photo_id] = {**entry, "bytes": len(data), "storage_bytes": size}
+        previous_id = next(reversed(self.entries), "")
+        self._index(self.entries, entry, original, sidecar)
+        if photo_id < previous_id:
+            self.entries = dict(sorted(self.entries.items()))
         self.used_bytes += size
 
     def page(self, meter_id, before, limit):
         with self.lock:
             self.maintain()
             rows = []
+            private = {"storage_bytes", "original_path", "metadata_path"}
             if self.entries is not None:
                 for photo_id in reversed(self.entries):
                     entry = self.entries[photo_id]
                     if (before is None or photo_id < before) and entry["meter_id"] == meter_id:
-                        rows.append({key: value for key, value in entry.items() if key != "storage_bytes"})
+                        rows.append({key: value for key, value in entry.items() if key not in private})
                         if len(rows) > limit:
                             break
             return {
@@ -195,7 +267,7 @@ class PhotoArchive:
             if entry is None or entry["meter_id"] != meter_id:
                 return None
             extension = entry["format"]
-            path = self._folder(photo_id) / ("original." + extension)
+            path = entry["original_path"]
             if path.resolve() != path or not path.is_file():
                 return None
             return path.read_bytes(), extension

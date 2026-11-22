@@ -275,7 +275,7 @@ function galleryCard(photo, meter, signal) {
   card.append(open, title, status);
   open.onclick = () => {
     if (!preview.hasAttribute("src")) return;
-    viewedPhoto = {path, name: `${meter}-${photo.id}.${photo.format}`};
+    viewedPhoto = {path, name: photo.file_name || `${meter}-${photo.id}.${photo.format}`};
     $("photoTitle").textContent = date;
     $("photoDetail").textContent = status.textContent;
     $("photoOriginal").src = preview.src;

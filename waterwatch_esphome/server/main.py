@@ -86,7 +86,7 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
 
     app = FastAPI(
         title="WaterWatch",
-        version="0.14.0",
+        version="0.14.1",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,

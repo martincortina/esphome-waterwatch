@@ -518,14 +518,16 @@ report successful capture cycles separately from total OCR photos and retries;
 100 successful cycles do not mean every individual photo was readable.
 
 
-## Photo archive (0.14.0)
+## Photo archive
 
 Open **Photos** and enable **Archive photos automatically** to begin. From the
 gallery you can view the selected meter's photos or download the original
 JPEG or PNG. WaterWatch archives previews, OCR tests, recorded and rejected
 readings, and each photo used in a flash retry. Exposure warm-up frames are
-excluded. Each original is stored with its capture metadata under
-`/media/waterwatch/YYYY/MM/DD/`, using UTC for the archive folders.
+excluded. Originals for the same day share one folder under
+`/media/waterwatch/YYYY-MM-DD/`. Names begin with the capture date and time in
+UTC, followed by a unique suffix. Existing archived photos are moved to this
+layout automatically. The gallery uses the same filenames for downloads.
 
 The archive keeps up to 30 days, with a 2 GB total limit across all meters.
 WaterWatch removes the oldest originals and their metadata when necessary.

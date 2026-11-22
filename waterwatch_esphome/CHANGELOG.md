@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1
+
+- Store all originals for a capture day directly in one YYYY-MM-DD folder.
+  The filename and gallery download start with the UTC capture date and time.
+- Move existing archived originals into the new layout while preserving gallery
+  IDs, metadata and image bytes.
+
 ## 0.14.0
 
 - Add a Photos gallery with original downloads and an automatic archive switch.
