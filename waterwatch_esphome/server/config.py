@@ -24,6 +24,7 @@ class Settings:
     home_assistant_url: str = ""
     home_assistant_token: str = field(default="", repr=False)
     ingress_mode: bool = False
+    photo_archive_dir: Path | None = None
 
     @classmethod
     def from_env(cls):
@@ -41,6 +42,7 @@ class Settings:
             home_assistant_url=os.getenv("HOME_ASSISTANT_URL", ""),
             home_assistant_token=secret("HOME_ASSISTANT_TOKEN"),
             ingress_mode=os.getenv("WATERWATCH_INGRESS", "0") == "1",
+            photo_archive_dir=Path(path) if (path := os.getenv("PHOTO_ARCHIVE_DIR")) else None,
         )
 
     def validate(self):

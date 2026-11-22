@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, StrictBool
 from starlette.concurrency import run_in_threadpool
 
 from server.config import Settings
@@ -21,11 +22,16 @@ from server.home_assistant import CameraCollector, CameraError, HomeAssistantCam
 from server.models import LogDeletion, LogSelection, ManualReading, MeterConfig
 from server.mqtt import MqttBridge
 from server.ocr import jpeg
+from server.photo_archive import PHOTO_ID
 from server.service import Service, public_reading, token_hash
 
 bearer = HTTPBearer(auto_error=False)
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 WEB = Path(__file__).resolve().parent / "web"
+
+
+class PhotoArchiveSetting(BaseModel):
+    enabled: StrictBool
 
 
 def create_app(settings=None, pipeline=None, start_background=True, ha_camera=None):
@@ -80,7 +86,7 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
 
     app = FastAPI(
         title="WaterWatch",
-        version="0.13.3",
+        version="0.14.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -196,6 +202,39 @@ def create_app(settings=None, pipeline=None, start_background=True, ha_camera=No
     @app.get("/api/home-assistant/flash-lights", dependencies=[Depends(admin)])
     def flash_lights():
         return ha_camera.flash_lights()
+
+    @app.get("/api/meters/{meter_id}/photos", dependencies=[Depends(admin)])
+    def photos(
+        meter_id: str, before: Annotated[str | None, Query(pattern=f"^{PHOTO_ID}$")] = None,
+        limit: Annotated[int, Query(ge=1, le=48)] = 12,
+    ):
+        config(meter_id)
+        try:
+            return service.photo_archive.page(meter_id, before, limit)
+        except OSError:
+            raise HTTPException(503, "Photo archive storage is unavailable") from None
+
+    @app.get("/api/meters/{meter_id}/photos/{photo_id}", dependencies=[Depends(admin)])
+    def archived_photo(meter_id: str, photo_id: str):
+        config(meter_id)
+        try:
+            original = service.photo_archive.original(meter_id, photo_id)
+        except OSError:
+            raise HTTPException(503, "Photo archive storage is unavailable") from None
+        if original is None:
+            raise HTTPException(404, "Photo expired or unavailable")
+        data, extension = original
+        return Response(data, media_type="image/png" if extension == "png" else "image/jpeg")
+
+    @app.put("/api/photo-archive", dependencies=[Depends(admin)])
+    def photo_archive_setting(setting: PhotoArchiveSetting):
+        try:
+            service.photo_archive.set_enabled(setting.enabled)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        except OSError:
+            raise HTTPException(503, "Photo archive storage is unavailable") from None
+        return {"enabled": setting.enabled}
 
     @app.get("/api/meters/{meter_id}/camera-image", dependencies=[Depends(admin)])
     def camera_preview(meter_id: str):

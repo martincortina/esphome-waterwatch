@@ -39,3 +39,39 @@ body[data-workspace-view=capture][data-has-baseline=false] #cameraCapture{displa
 .digit-result.reference_verified,.digit-result.analog_position_verified,.digit-result.analog_verified{border-top-color:var(--accent)}
 
 .wheel-editor{padding:10px;border:1px solid var(--line);border-radius:6px;margin:8px 0}.wheel-editor p{margin-top:5px}.dial-scale-summary{font-weight:600;color:var(--accent);margin-top:8px}
+
+.photo-toolbar { flex-wrap: wrap; }
+.photo-toolbar .button-row { flex-wrap: wrap; }
+.photo-toggle { display: flex; align-items: center; gap: 8px; }
+#photoGalleryMessage { margin-bottom: 8px; }
+.photo-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+  gap: 10px;
+}
+.photo-gallery article {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+.photo-gallery strong { font-size: 12px; }
+.photo-preview {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+}
+.photo-preview img { width: 100%; height: 100%; object-fit: contain; }
+#olderPhotos, #downloadPhoto { margin-top: 10px; }
+#photoDialog { width: min(760px, calc(100% - 24px)); }
+#photoDialog img { display: block; width: 100%; max-height: 65vh; object-fit: contain; background: var(--canvas); }
+#photoDetail { margin-top: 8px; }
+body[data-workspace-view="photos"] .stats { display: none; }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.0
+
+- Add a Photos gallery with original downloads and an automatic archive switch.
+- Store originals from previews, tests, readings and OCR retries under
+  /media/waterwatch. Keep up to 30 days and 2 GB, shared across meters.
+- Keep photo storage separate from the readings log.
+
 ## 0.13.3
 
 - Retry an uncertain flash OCR capture with fresh photos, up to three attempts.

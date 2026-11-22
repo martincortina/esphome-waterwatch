@@ -12,6 +12,9 @@ const sourceSizes=new WeakMap();
 let lastTest=null;
 let referenceSource=null, referenceSourceId=null;
 let dialMark=null;
+const meterViews = ["capture", "setup", "history", "photos"];
+let galleryRequest, nextPhotoPage, viewedPhoto, archiveAvailable = false;
+const galleryUrls = new Set();
 const verifiedStatuses=new Set(["agreed","rolling_verified","analog_verified","reference_verified","analog_position_verified"]);
 const canvas = $("preview"), ctx = canvas.getContext("2d"), stage = $("previewStage");
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -101,6 +104,10 @@ function updateControls() {
   for (const id of ["rotateLeft","rotateRight","rotation","rotationSlider","resetRotation"]) $(id).disabled = busy || !current;
   updateDigitControls();
   updateLogControls();
+  $("archiveEnabled").disabled = busy || !archiveAvailable;
+  for (const button of $("photoGallery").querySelectorAll(".photo-preview")) {
+    button.disabled = busy || !button.firstElementChild.hasAttribute("src");
+  }
 }
 function sourceControls() {
   const fromHa = $("sourceKind").value === "home_assistant";
@@ -195,20 +202,157 @@ async function saveConfiguration(notify = true) {
   if (notify) message("Configuration saved.");
 }
 function showView(name) {
+  const previous = document.body.dataset.workspaceView;
   document.body.dataset.workspaceView=name;
-  for (const key of ["capture","setup","history"]) {
+  for (const key of meterViews) {
     const active = key === name;
     $(`${key}Tab`).setAttribute("aria-selected", String(active)); $(`${key}Tab`).tabIndex = active ? 0 : -1;
   }
-  $("captureView").hidden=name==="history";$("historyView").hidden=name!=="history";
+  $("captureView").hidden = name !== "capture" && name !== "setup";
+  $("historyView").hidden = name !== "history";
+  $("photosView").hidden = name !== "photos";
   $("captureView").setAttribute("aria-labelledby",name==="setup"?"setupTab":"captureTab");
   setCalibration(name==="setup");
   requestAnimationFrame(resizePreview);
+  if (name === "photos") refreshPhotos();
+  else if (previous === "photos") clearGallery();
 }
-for (const name of ["capture","setup","history"]) {
+for (const name of meterViews) {
   $(`${name}Tab`).onclick = () => showView(name);
-  $(`${name}Tab`).onkeydown = event => { if (["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) { event.preventDefault();const names=["capture","setup","history"],next=names[event.key==="Home"?0:event.key==="End"?2:(names.indexOf(name)+(event.key==="ArrowLeft"?2:1))%3];showView(next);$(`${next}Tab`).focus(); } };
+  $(`${name}Tab`).onkeydown = event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    let index = meterViews.indexOf(name) + (event.key === "ArrowLeft" ? -1 : 1);
+    if (event.key === "Home") index = 0;
+    if (event.key === "End") index = meterViews.length - 1;
+    const next = meterViews.at(index % meterViews.length);
+    showView(next);
+    $(`${next}Tab`).focus();
+  };
 }
+
+function clearGallery() {
+  galleryRequest?.abort();
+  galleryRequest = null;
+  $("photoDialog").close();
+  $("photoOriginal").removeAttribute("src");
+  viewedPhoto = null;
+  for (const url of galleryUrls) URL.revokeObjectURL(url);
+  galleryUrls.clear();
+  $("photoGallery").replaceChildren();
+  $("olderPhotos").hidden = true;
+  $("archiveStatus").textContent = "";
+  archiveAvailable = false;
+  $("archiveEnabled").disabled = true;
+}
+
+function photoDescription(photo) {
+  const type = {preview: "Preview", test: "OCR test", reading: "Reading"}[photo.source] || "Photo";
+  return [
+    type,
+    photo.raw_value ? `${photo.raw_value} m³` : null,
+    photo.reason ? readable(photo.reason) : null,
+    photo.attempt > 1 ? `Attempt ${photo.attempt}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+function galleryCard(photo, meter, signal) {
+  const path = `/api/meters/${meter}/photos/${photo.id}`;
+  const date = new Date(photo.captured_at).toLocaleString();
+  const card = document.createElement("article");
+  const open = document.createElement("button");
+  const preview = document.createElement("img");
+  const title = document.createElement("strong");
+  const status = document.createElement("small");
+  open.type = "button";
+  open.className = "photo-preview";
+  open.disabled = true;
+  open.setAttribute("aria-label", `Open meter photo taken ${date}`);
+  preview.alt = "Meter photo";
+  open.append(preview);
+  title.textContent = date;
+  status.textContent = photoDescription(photo);
+  card.append(open, title, status);
+  open.onclick = () => {
+    if (!preview.hasAttribute("src")) return;
+    viewedPhoto = {path, name: `${meter}-${photo.id}.${photo.format}`};
+    $("photoTitle").textContent = date;
+    $("photoDetail").textContent = status.textContent;
+    $("photoOriginal").src = preview.src;
+    $("photoDialog").showModal();
+  };
+  const observer = new IntersectionObserver(async entries => {
+    if (!entries.some(entry => entry.isIntersecting)) return;
+    observer.disconnect();
+    try {
+      const blob = await (await api(path, {signal})).blob();
+      if (signal.aborted) return;
+      const url = URL.createObjectURL(blob);
+      galleryUrls.add(url);
+      preview.src = url;
+      open.disabled = busy;
+    } catch {
+      if (!signal.aborted) preview.alt = "Photo expired or unavailable";
+    }
+  }, {rootMargin: "240px"});
+  signal.addEventListener("abort", () => observer.disconnect(), {once: true});
+  observer.observe(card);
+  return card;
+}
+
+async function refreshPhotos(append = false) {
+  if (!append) {
+    clearGallery();
+    galleryRequest = new AbortController();
+  }
+  if (!galleryRequest || !selected()) return;
+  const {signal} = galleryRequest;
+  const meter = selected();
+  const older = $("olderPhotos");
+  older.hidden = true;
+  $("photoGalleryMessage").textContent = "Loading photos…";
+  try {
+    const query = append ? `?before=${encodeURIComponent(nextPhotoPage)}` : "";
+    const archive = await (await api(`/api/meters/${meter}/photos${query}`, {signal})).json();
+    if (signal.aborted) return;
+    archiveAvailable = archive.available;
+    $("archiveEnabled").checked = archive.enabled;
+    $("archiveEnabled").disabled = busy || !archiveAvailable;
+    const megabytes = (archive.used_bytes / 1e6).toLocaleString(undefined, {maximumFractionDigits: 1});
+    $("archiveStatus").textContent = archive.available
+      ? `${archive.retention_days} days · ${megabytes} MB used of ${archive.limit_bytes / 1e9} GB`
+      : "Photo storage is unavailable.";
+    let notice = archive.enabled ? "" : "Automatic archiving is off.";
+    if (archive.write_error) notice = "WaterWatch could not save the latest photo. Check media storage.";
+    if (!notice && !append && !archive.photos.length) notice = "Take a photo or run an OCR test to start the gallery.";
+    $("photoGalleryMessage").textContent = notice;
+    $("photoGallery").append(...archive.photos.map(photo => galleryCard(photo, meter, signal)));
+    nextPhotoPage = archive.next_before;
+    older.hidden = !nextPhotoPage;
+  } catch (error) {
+    if (!signal.aborted) {
+      $("photoGalleryMessage").textContent = error.message;
+      older.hidden = !append;
+    }
+  }
+}
+
+$("refreshPhotos").onclick = () => refreshPhotos();
+$("olderPhotos").onclick = () => refreshPhotos(true);
+$("archiveEnabled").onchange = act(async () => {
+  const enabled = $("archiveEnabled").checked;
+  try {
+    await api("/api/photo-archive", {method: "PUT", body: JSON.stringify({enabled})});
+  } catch (error) {
+    $("archiveEnabled").checked = !enabled;
+    throw error;
+  }
+  await refreshPhotos();
+});
+$("downloadPhoto").onclick = act(async () => {
+  if (viewedPhoto) await download(viewedPhoto.path, viewedPhoto.name);
+});
+$("logout").addEventListener("click", clearGallery);
 function updateHint() {
   if (!current) return;
   const cfg = current.config; let text, action, target;
@@ -693,6 +837,7 @@ $("deleteLogForm").onsubmit=act(async()=>{
   $("deleteLogDialog").close();pendingDeletion=null;selectedLogs.clear();await refresh();message(`${result.deleted} reading logs deleted. Current verified counter preserved.${result.image_cleanup_pending?" Some capture photos could not be removed yet.":""}`);
 });
 async function renderMeter() {
+  clearGallery();
   clearDiagnostics();
   selectedLogs.clear();pendingDeletion=null;$("deleteLogDialog").close();
   current = meters.find(meter=>meter.config.id === $("meter").value) || null;
@@ -712,6 +857,7 @@ async function renderMeter() {
   renderConfig(); updateHint();
   if (layoutMeterId !== selected()) { $("cameraSettings").open = !current.config.source.camera_entity; $("recognitionSettings").open = !current.config.rois.length; setCalibration(document.body.dataset.workspaceView==="setup"||!current.config.rois.length); layoutMeterId = selected(); }
   await loadImage(); historyRows = await (await api(`/api/meters/${selected()}/history`)).json(); renderHistory();
+  if (document.body.dataset.workspaceView === "photos") await refreshPhotos();
 }
 async function refresh() {
   if (dirty) { message("Save or discard your changes before refreshing.", true); return; }

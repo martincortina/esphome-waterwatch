@@ -516,3 +516,20 @@ image hashes, raw results, reasons and scores; the UI shows retry counts. If all
 three photos remain uncertain, the result stays rejected. When testing stability,
 report successful capture cycles separately from total OCR photos and retries;
 100 successful cycles do not mean every individual photo was readable.
+
+
+## Photo archive (0.14.0)
+
+Open **Photos** and enable **Archive photos automatically** to begin. From the
+gallery you can view the selected meter's photos or download the original
+JPEG or PNG. WaterWatch archives previews, OCR tests, recorded and rejected
+readings, and each photo used in a flash retry. Exposure warm-up frames are
+excluded. Each original is stored with its capture metadata under
+`/media/waterwatch/YYYY/MM/DD/`, using UTC for the archive folders.
+
+The archive keeps up to 30 days, with a 2 GB total limit across all meters.
+WaterWatch removes the oldest originals and their metadata when necessary.
+Turn off **Archive photos automatically** to stop saving new photos. Existing
+photos remain viewable and continue to expire normally. This setting is shared
+by all meters. The archive is independent of consumption history and starts
+with new photos after the update.

@@ -35,7 +35,7 @@
           <article><span>OCR CONFIDENCE</span><strong id="confidence">—</strong><small>Latest recorded capture</small></article>
           <article><span>READING STATUS</span><strong id="readingStatus" class="small">—</strong><small id="rssi">Waiting for a capture</small></article>
         </section>
-        <nav class="view-tabs" role="tablist" aria-label="Meter views"><button id="captureTab" role="tab" aria-selected="true" aria-controls="captureView">Read</button><button id="setupTab" role="tab" aria-selected="false" aria-controls="captureView" tabindex="-1">Setup</button><button id="historyTab" role="tab" aria-selected="false" aria-controls="historyView" tabindex="-1">History</button></nav>
+        <nav class="view-tabs" role="tablist" aria-label="Meter views"><button id="captureTab" role="tab" aria-selected="true" aria-controls="captureView">Read</button><button id="setupTab" role="tab" aria-selected="false" aria-controls="captureView" tabindex="-1">Setup</button><button id="historyTab" role="tab" aria-selected="false" aria-controls="historyView" tabindex="-1">History</button><button id="photosTab" role="tab" aria-selected="false" aria-controls="photosView" tabindex="-1">Photos</button></nav>
         <div id="setupHint" class="setup-hint"><span id="setupHintText">Connect your camera to get started.</span><button id="setupHintAction" class="quiet">Set up camera</button></div>
         <section id="captureView" role="tabpanel" aria-labelledby="captureTab">
           <nav class="workflow" aria-label="Calibration steps"><button id="workflowPhoto" class="quiet"><b>1</b><span>Take a photo<small>Check focus and light</small></span></button><button id="workflowDigits" class="quiet"><b>2</b><span>Adjust digits<small>After moving the camera</small></span></button><button id="workflowTest" class="quiet"><b>3</b><span>Check reading<small>Test without recording</small></span></button></nav>
@@ -83,13 +83,31 @@
           <section class="panel"><div class="section-title"><h2>Verified counter</h2><span class="muted">Cumulative meter reading · m³</span></div><canvas id="graph" width="1200" height="200" aria-label="Cumulative water consumption history"></canvas><p id="graphEmpty" class="muted">The graph appears after two verified readings.</p></section>
           <section class="panel"><div class="section-title"><h2>Reading log <span id="historyCount" class="count">0</span></h2><div class="button-row"><select id="historyFilter" aria-label="Filter reading log"><option value="all">All readings</option><option value="accepted">Accepted</option><option value="rejected">Needs review</option></select><button id="logs" class="quiet">Export log</button><button id="deleteSelectedLogs" class="quiet danger">Delete selected</button><button id="deleteRejectedLogs" class="quiet danger">Delete rejected</button><button id="clearReadingLog" class="quiet danger">Clear log</button></div></div><div class="table"><table><thead><tr><th><input id="selectVisibleLogs" type="checkbox" aria-label="Select all visible readings"></th><th>Time</th><th>Raw OCR</th><th>Verified m³</th><th>Confidence</th><th>Result</th><th>Source</th><th>Actions</th></tr></thead><tbody id="history"></tbody></table></div></section>
         </section>
+        <section id="photosView" class="panel" role="tabpanel" aria-labelledby="photosTab" hidden>
+          <div class="section-title photo-toolbar">
+            <div><h2>Meter photos</h2><p id="archiveStatus" role="status"></p></div>
+            <div class="button-row">
+              <label class="photo-toggle"><input id="archiveEnabled" type="checkbox" disabled> Archive photos automatically</label>
+              <button id="refreshPhotos" type="button" class="secondary">Refresh photos</button>
+            </div>
+          </div>
+          <p id="photoGalleryMessage" role="status"></p>
+          <div id="photoGallery" class="photo-gallery"></div>
+          <button id="olderPhotos" type="button" class="secondary" hidden>Load older photos</button>
+        </section>
         <div class="savebar"><span id="saveState" class="save-state">All changes saved</span><div class="button-row"><button id="discard" class="quiet" disabled>Discard changes</button><button id="save" class="primary" disabled>Save configuration</button></div></div>
       </div>
     </div>
     <p id="message" role="status" aria-live="polite"></p>
+    <dialog id="photoDialog" aria-labelledby="photoTitle">
+      <div class="section-title"><h2 id="photoTitle"></h2><form method="dialog"><button class="quiet">Close</button></form></div>
+      <img id="photoOriginal" alt="Original meter photo">
+      <p id="photoDetail" class="muted"></p>
+      <button id="downloadPhoto" class="secondary" type="button">Download original</button>
+    </dialog>
     <dialog id="deleteLogDialog" aria-labelledby="deleteLogTitle"><form id="deleteLogForm"><h2 id="deleteLogTitle">Delete reading logs?</h2><p id="deleteLogSummary"></p><p>The current verified counter is kept for future validation. Attached capture photos are deleted. Home Assistant statistics and exported copies are unchanged.</p><p>This cannot be undone.</p><div class="button-row"><button id="cancelLogDeletion" class="secondary" type="button">Cancel</button><button id="confirmLogDeletion" class="primary danger" type="submit">Delete permanently</button></div></form></dialog>
   </main>
-  <footer>WaterWatch <span>0.13.3 · Local OCR</span></footer>
+  <footer>WaterWatch <span>0.14.0 · Local OCR</span></footer>
   <script src="static/roi-geometry.js" defer></script>
   <script src="static/test-bundle.js" defer></script>
   <script src="static/dial-tools.js" defer></script>

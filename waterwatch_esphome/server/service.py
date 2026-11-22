@@ -13,6 +13,7 @@ import cv2
 from server.alignment import AlignmentError, register
 from server.models import ManualReading, MeterConfig, VisualReference, m3, micro_m3, timestamp, utcnow
 from server.ocr import Pipeline, align, crop_digit, decode
+from server.photo_archive import PhotoArchive
 from server.reference_ocr import ReferenceSample
 from server.storage import Store
 from server.validation import validate
@@ -46,6 +47,7 @@ class Service:
         self.references = settings.data_dir / "references"
         self.references.mkdir(exist_ok=True)
         self.store = Store(settings.data_dir / "waterwatch.sqlite3")
+        self.photo_archive = PhotoArchive(settings.photo_archive_dir, settings.data_dir)
         self.pipeline = pipeline or Pipeline(reference_loader=self.load_reference,
                                              recognition_loader=self.load_visual_references)
         # Bound inference concurrency and serialize validation, configuration, and corrections.
@@ -243,6 +245,7 @@ class Service:
         self, meter_id, event_id, captured_at, data, rssi=None, test_only=False,
         capture_metadata=None,
         include_images=False,
+        archive_upload=True,
     ):
         captured_at = timestamp(captured_at)
         fingerprint = hashlib.sha256(data + captured_at.encode()).hexdigest()
@@ -272,13 +275,19 @@ class Service:
             result.details["inference_ms"] = round(elapsed, 2)
             if capture_metadata:
                 result.details["capture"] = capture_metadata
+            capture_time = datetime.fromisoformat(captured_at)
             value, reason, rate = validate(
                 result,
                 cfg,
-                datetime.fromisoformat(captured_at),
+                capture_time,
                 utcnow(),
                 self.store.last_good(meter_id),
             )
+            if archive_upload:
+                self.photo_archive.save(
+                    meter_id, capture_time, data, source="test" if test_only else "reading",
+                    result={"raw_value": result.raw_value, "confidence": result.confidence, "reason": reason},
+                )
             if test_only:
                 return {
                     "raw_value": result.raw_value,
@@ -465,3 +474,4 @@ class Service:
         for path in self.images.glob("*.jpg"):
             if path.stat().st_mtime < cutoff:
                 path.unlink(missing_ok=True)
+        self.photo_archive.maintain()

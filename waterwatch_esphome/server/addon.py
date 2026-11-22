@@ -49,6 +49,7 @@ def addon_settings(options, supervisor_token, data_dir=Path("/data"), transport=
         home_assistant_url="http://supervisor/core/api",
         home_assistant_token=supervisor_token,
         ingress_mode=True,
+        photo_archive_dir=Path("/media/waterwatch"),
         mqtt_host=broker.get("host", ""),
         mqtt_port=int(broker.get("port", 1883)),
         mqtt_username=broker.get("username", ""),
