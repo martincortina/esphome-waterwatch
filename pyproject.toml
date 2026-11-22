@@ -1,11 +1,12 @@
 [project]
-name = "esphome-waterwatch"
-version = "0.14.3"
+name = "waterwatch"
+version = "0.14.4"
 requires-python = ">=3.12"
+description = "Local-first mechanical water meter camera and OCR service"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["waterwatch_esphome"]
+pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py312"
@@ -14,6 +15,3 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501", "B008"]
-
-[tool.ruff.lint.isort]
-known-first-party = ["server"]

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from server.models import DialConfig, MeterConfig, ROI, VisualReference
+from server.models import ROI, DialConfig, MeterConfig, VisualReference
 from server.ocr import Pipeline
 from server.reference_ocr import (
     ReferenceSample,
@@ -214,6 +214,36 @@ def test_edge_match_rejects_two_labels_for_an_indistinguishable_pointer_pose():
     assert recognize_dial_edge_match(image, DialConfig(), [correct, identical], .8) is None
 
 
+def test_dial_luminance_consensus_requires_distinct_support_and_a_separated_rival(monkeypatch):
+    def image(marker):
+        return np.full((32, 32, 3), marker, np.uint8)
+
+    def profile(patch, _):
+        marker = patch[0, 0, 0]
+        correlations = {
+            0: [1.] * 8,
+            1: [.93, .997, .93, .997, .55, .98, .55, .98],
+            2: [.92, .996, .92, .996, .60, .97, .60, .97],
+            3: [.7, .90, .7, .90, .50, .62, .50, .62],
+        }[marker]
+        return np.array([(score, math.sqrt(1 - score**2)) for score in correlations])
+
+    monkeypatch.setattr("server.reference_ocr.dial_edge_profile", profile)
+    first = ReferenceSample(image(1), 4, identifier="first", kind="sector")
+    second = ReferenceSample(image(2), 4, identifier="second", kind="sector")
+    duplicate = ReferenceSample(image(1), 4, identifier="duplicate", kind="sector")
+    rival = ReferenceSample(image(3), 5, identifier="rival", kind="sector")
+    conflict = ReferenceSample(image(2), 5, identifier="conflict", kind="sector")
+    cfg = DialConfig()
+
+    result = recognize_dial_edge_match(image(0), cfg, [first, second, rival], .8)
+    assert result["analog_policy"] == "verified_sector_luminance_consensus"
+    assert [label for label, _ in result["results"]] == ["4", "4"]
+    assert recognize_dial_edge_match(image(0), cfg, [first, duplicate, rival], .8) is None
+    assert recognize_dial_edge_match(image(0), cfg, [first, second, conflict], .8) is None
+    assert recognize_dial_edge_match(image(0), cfg, [first, second], .8) is None
+
+
 def test_pointer_prefers_precise_calibration_over_higher_scoring_coarse_label(monkeypatch):
     import server.reference_ocr as module
     monkeypatch.setattr(module,'pointer_polar',lambda image,*args:np.full((720,48),image[0,0,0],np.float32))
@@ -298,7 +328,8 @@ def test_reference_api_is_private_geometry_bound_and_does_not_change_ledger(clie
     # References written before the optional kind field remain readable.
     import json
     metadata=client.service.references/f"recognition-house-{cfg.rois[0].visual_references[0].id}.json"
-    legacy=json.loads(metadata.read_text(encoding='utf-8'));legacy['label'].pop('kind')
+    legacy = json.loads(metadata.read_text(encoding='utf-8'))
+    legacy['label'].pop('kind')
     metadata.write_text(json.dumps(legacy),encoding='utf-8')
     assert len(client.service.load_visual_references(cfg,0))==1
     cfg.rois[0].x = .01

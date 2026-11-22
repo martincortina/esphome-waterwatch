@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.4
+
+- Verify dial readings under glare with matching luminance edges, colour support, and two independent references.
+
 ## 0.14.3
 
 - Compare dial edges when adjacent verified pointer positions are close.

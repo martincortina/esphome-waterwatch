@@ -425,6 +425,7 @@ def recognize_dial_edge_match(patch, cfg, samples, threshold):
         return None
     current = dial_edge_profile(patch, cfg)
     matches = []
+    luminance_matches = []
     for sample in samples:
         if sample.kind != "sector":
             continue
@@ -435,14 +436,29 @@ def recognize_dial_edge_match(patch, cfg, samples, threshold):
         edge = float(min(similarities[4:]))
         error = .8 * (.55 * (1 - color) + .45 * (1 - light)) + .2 * (1 - edge)
         reliable = color >= max(.94, threshold) and light >= max(.97, threshold) and edge >= .76
-        matches.append((error, str(int(sample.value)), sample, color, light, edge, reliable))
+        label = str(int(sample.value))
+        matches.append((error, label, sample, color, light, edge, reliable))
+        light_edge = float(min(similarities[5], similarities[7]))
+        signals = [color, light, light_edge]
+        luminance_matches.append((pose_score(signals, (.82, .988, .922)), label, signals, sample))
     best = min((item for item in matches if item[-1]), key=lambda item: item[0], default=None)
-    if best is None:
+    if best is not None:
+        error, label, sample, color, light, edge, _ = best
+        competing = min((item[0] for item in matches if item[1] != label), default=None)
+        if competing is not None and error + .001 < .55 * max(competing, .001):
+            return {"results": [(label, color), (label, light)], "analog_policy": "verified_sector_edge_match",
+                    "sector_reference_id": sample.identifier, "sector_reference_scores": [color, light, edge],
+                    "recognition_sources": ["Verified sector · pointer colour", "Verified sector · edge contrast"]}
+
+    # Reflections move the edges in the red mask even when the underlying dial is
+    # still. Require two distinct references with the same light and shadow edges
+    # in both radial bands, with independent colour support and no nearby rival.
+    support = recognizable_pose(luminance_matches, .5, 2, threshold)
+    if not support or not any(label != support[0][1] for _, label, _, _ in luminance_matches):
         return None
-    error, label, sample, color, light, edge, _ = best
-    competing = min((item[0] for item in matches if item[1] != label), default=None)
-    if competing is None or error + .001 >= .55 * max(competing, .001):
-        return None
-    return {"results": [(label, color), (label, light)], "analog_policy": "verified_sector_edge_match",
-            "sector_reference_id": sample.identifier, "sector_reference_scores": [color, light, edge],
-            "recognition_sources": ["Verified sector · pointer colour", "Verified sector · edge contrast"]}
+    _, label, scores, sample = support[0]
+    color, light, edge = [min(a, b) for a, b in zip(scores, support[1][2], strict=True)]
+    return {"results": [(label, color), (label, min(light, edge))], "analog_policy": "verified_sector_luminance_consensus",
+            "sector_reference_id": sample.identifier, "sector_reference_ids": [row[3].identifier for row in support],
+            "sector_reference_scores": [color, light, edge],
+            "recognition_sources": ["Verified sector · pointer colour", "Verified sector · luminance edges"]}
